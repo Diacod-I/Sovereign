@@ -9,6 +9,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
       config={{
         embeddedWallets: { createOnLogin: 'users-without-wallets' },
         loginMethods: ['email', 'wallet'],
+        appearance: { theme: '#0a0a0a', accentColor: '#2FFF00' },
       }}
     >
       {children}

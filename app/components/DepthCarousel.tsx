@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import gsap from 'gsap';
 import '../styles/DepthCarousel.css';
 
@@ -25,7 +25,7 @@ const normalizeItem = (it: string | ItemObject): ItemObject =>
   typeof it === 'string' ? { image: it, alt: '' } : it;
 
 
-const DepthCarousel = ({
+const DepthCarousel = forwardRef<any, any>(({
   items = DEFAULT_ITEMS,
   cardWidth = 300,
   cardHeight = 380,
@@ -44,11 +44,12 @@ const DepthCarousel = ({
   autoplay = false,
   autoplayDelay = 3200,
   loop = true,
+  enableWheel = false,
   showControls = true,
   showIndicators = true,
   onChange,
   className = ''
-}) => {
+}, ref) => {
   const data = useMemo(() => (Array.isArray(items) ? items : []).map(normalizeItem), [items]);
   const count = data.length;
 
@@ -185,6 +186,8 @@ const DepthCarousel = ({
 
   const navigateBy = useCallback(step => setFocus(focusRef.current + step, true), [setFocus]);
 
+  useImperativeHandle(ref, () => ({ setFocus: (i) => setFocus(i, true), next: () => navigateBy(1), prev: () => navigateBy(-1) }), [setFocus, navigateBy]);
+
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
@@ -201,7 +204,7 @@ const DepthCarousel = ({
 
   useEffect(() => {
     const el = rootRef.current;
-    if (!el) return;
+    if (!el || !enableWheel) return;
     const onWheel = e => {
       const cfg = cfgRef.current;
       if (cfg.count < 2) return;
@@ -220,7 +223,7 @@ const DepthCarousel = ({
       el.removeEventListener('wheel', onWheel);
       if (wheelTimerRef.current) clearTimeout(wheelTimerRef.current);
     };
-  }, [layout, setFocus]);
+  }, [layout, setFocus, enableWheel]);
 
   const onPointerDown = useCallback(e => {
     const cfg = cfgRef.current;
@@ -443,7 +446,9 @@ const DepthCarousel = ({
       )}
     </div>
   );
-};
+});
+
+DepthCarousel.displayName = 'DepthCarousel';
 
 export default DepthCarousel;
 

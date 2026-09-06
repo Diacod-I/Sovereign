@@ -1,27 +1,15 @@
 @import "tailwindcss";
 
 :root {
-  --background: #faf9f7;
-  --foreground: #141414;
-  --muted: #6b6b6b;
-  --hairline: #e8e6e1;
-  --panel: #ffffff;
-  --accent: #0d5c54;
-  --btn: #141414;
-  --btn-fg: #ffffff;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-    --muted: #9a9a9a;
-    --hairline: #232323;
-    --panel: #121212;
-    --accent: #2dd4bf;
-    --btn: #ffffff;
-    --btn-fg: #0a0a0a;
-  }
+  color-scheme: dark;
+  --background: #0a0a0a;
+  --foreground: #ededed;
+  --muted: #9a9a9a;
+  --hairline: #232323;
+  --panel: #121212;
+  --accent: #2FFF00;
+  --btn: #ffffff;
+  --btn-fg: #0a0a0a;
 }
 
 @theme inline {
@@ -198,3 +186,37 @@ body {
   }
 }
 
+
+
+.sovereign-mark {
+  position: relative;
+  display: inline-block;
+  height: 1.1em;
+  line-height: 1.1em;
+  padding: 0 0.18em;
+  border-radius: 0;
+  color: #111111;
+  background-color: #efe6d0;
+  background-image:
+    radial-gradient(120% 150% at 18% 8%, rgba(150, 110, 60, 0.20), transparent 55%),
+    radial-gradient(130% 150% at 88% 92%, rgba(120, 85, 45, 0.24), transparent 55%),
+    radial-gradient(90% 120% at 60% 40%, rgba(180, 150, 100, 0.12), transparent 60%);
+  box-shadow: inset 0 0 0 1px rgba(120, 90, 50, 0.18);
+}
+.sovereign-mark__sizer {
+  visibility: hidden;
+  white-space: nowrap;
+  font-family: Copperplate, Baskerville, serif;
+}
+.sovereign-mark__cycle {
+  position: absolute;
+  left: 0.18em;
+  right: 0.18em;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  line-height: 1;
+}
