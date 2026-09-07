@@ -44,7 +44,6 @@ export default function Home() {
           <Image
             src={logoTransparent}
             alt='Logo with text Sovereign'
-            placeholder="blur"
             width={36}
             height={36} />
           <p className="mt-1 mx-2 text-lg">
