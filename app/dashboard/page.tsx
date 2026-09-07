@@ -3,8 +3,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { usePrivy } from '@privy-io/react-auth';
 import { useRouter } from 'next/navigation';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import Brand from '../components/Brand';
+import Copyable from '../components/Copyable';
+import Avatar from '../components/Avatar';
 
-type Tab = 'overview' | 'agents' | 'marketplace' | 'approvals' | 'activity';
+type Tab = 'overview' | 'agents' | 'marketplace' | 'allowlist' | 'activity';
 
 const short = (a: string) => a.slice(0, 6) + '…' + a.slice(-4);
 
@@ -14,9 +18,10 @@ const INITIAL_AGENTS = [
   { id: 'ag_3', name: 'Ops Bill-Pay Agent', wallet: '0x71d004be55aa20c1e8f3', dailyBudget: 1000, perAction: 400, approvalThreshold: 500, allowlist: 4, spentToday: 0, status: 'paused' },
 ];
 
-const INITIAL_APPROVALS = [
-  { id: 'ap_1', agent: 'Procurement Agent', counterparty: 'Acme Data Co.', amount: 320, reason: 'Dataset purchase — over the $250 line', ts: '2m ago' },
-  { id: 'ap_2', agent: 'Ops Bill-Pay Agent', counterparty: 'CloudHost Inc.', amount: 640, reason: 'Invoice 3× the usual monthly total', ts: '18m ago' },
+const INITIAL_ALLOWLIST = [
+  { id: 'wl_1', name: 'ChainMetrics · On-chain Data Agent', address: '0x3b12aa77c0e4d5a9c3f2b8e1d0447a2f9c6b1e30', cap: 5 },
+  { id: 'wl_2', name: 'Sentinel Labs · Address Risk Agent', address: '0x9e51c204be55aa20c1e8f3aa771d004be55aa20c', cap: 20 },
+  { id: 'wl_3', name: 'Arrakis · Liquidity Intel Agent', address: '0x77a0e1730af4b902dd512c88e1730af4b902dd51', cap: 2 },
 ];
 
 const INITIAL_ACTIVITY = [
@@ -37,6 +42,7 @@ type Listing = {
   stake: number;
   parties: number;
   summary: string;
+  payTo: string;
   mcp: {
     endpoint: string;
     transport: string;
@@ -47,6 +53,16 @@ type Listing = {
 
 // Agent listings only — each is an agent that exposes tools over MCP,
 // paid per-call in USDC via x402.
+const DAILY_SPEND = [
+  { day: 'Mon', usdc: 42 },
+  { day: 'Tue', usdc: 88 },
+  { day: 'Wed', usdc: 65 },
+  { day: 'Thu', usdc: 120 },
+  { day: 'Fri', usdc: 54 },
+  { day: 'Sat', usdc: 30 },
+  { day: 'Sun', usdc: 100 },
+];
+
 const LISTINGS: Listing[] = [
   {
     id: 'ls_1',
@@ -59,6 +75,7 @@ const LISTINGS: Listing[] = [
     stake: 500,
     parties: 61,
     summary: 'Live wallet, token, and protocol intelligence for any EVM address.',
+    payTo: '0x3b12aa77c0e4d5a9c3f2b8e1d0447a2f9c6b1e30',
     mcp: {
       endpoint: 'https://mcp.chainmetrics.xyz/sse',
       transport: 'HTTP + x402',
@@ -81,6 +98,7 @@ const LISTINGS: Listing[] = [
     stake: 1000,
     parties: 44,
     summary: 'Sanctions, mixer, and exploit exposure scoring before you transact.',
+    payTo: '0x9e51c204be55aa20c1e8f3aa771d004be55aa20c',
     mcp: {
       endpoint: 'https://api.sentinel.sh/mcp',
       transport: 'HTTP + x402',
@@ -103,6 +121,7 @@ const LISTINGS: Listing[] = [
     stake: 750,
     parties: 88,
     summary: 'Real-time DEX depth, slippage, and LP position snapshots.',
+    payTo: '0x77a0e1730af4b902dd512c88e1730af4b902dd51',
     mcp: {
       endpoint: 'https://mcp.arrakis.fi/v1',
       transport: 'HTTP + x402',
@@ -125,6 +144,7 @@ const LISTINGS: Listing[] = [
     stake: 100,
     parties: 3,
     summary: 'SOC 2 / ISO control lookups and audit-evidence drafting.',
+    payTo: '0x0c44be55aa20c1e8f371d004be55aa20c1e8f371',
     mcp: {
       endpoint: 'https://freshvault.dev/mcp',
       transport: 'HTTP + x402',
@@ -174,13 +194,32 @@ function ArrowUpRight({ size = 12 }: { size?: number }) {
   );
 }
 
+// Amber warning + hover tooltip for low-reputation listings.
+function DiversityWarning() {
+  return (
+    <span className="group relative inline-flex" tabIndex={0}>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-label="Warning">
+        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+        <line x1="12" y1="9" x2="12" y2="13" />
+        <line x1="12" y1="17" x2="12.01" y2="17" />
+      </svg>
+      <span className="pointer-events-none absolute bottom-full right-0 z-20 mb-2 hidden w-56 rounded-lg border border-hairline bg-panel px-3 py-2 text-left text-[11px] leading-snug text-muted shadow-xl group-hover:block">
+        Low counterparty diversity! Agent reputation not yet established.
+      </span>
+    </span>
+  );
+}
+
 // The MCP detail body — shown in the click modal.
 function McpDetails({ l }: { l: Listing }) {
   return (
     <>
-      <div>
-        <div className="font-medium">{l.name}</div>
-        <div className="text-xs text-muted">by {l.provider}</div>
+      <div className="flex items-center gap-3">
+        <Avatar name={l.provider} size={40} />
+        <div>
+          <div className="font-medium">{l.name}</div>
+          <div className="text-xs text-muted">by {l.provider}</div>
+        </div>
       </div>
       <p className="mt-3 text-sm text-muted">{l.summary}</p>
 
@@ -191,6 +230,11 @@ function McpDetails({ l }: { l: Listing }) {
         </div>
         <div className="mt-1 break-all font-mono text-xs">{l.mcp.endpoint}</div>
         <div className="mt-1 font-mono text-[10px] text-muted">protocol {l.mcp.version}</div>
+      </div>
+
+      <div className="mt-3 flex items-center justify-between rounded-lg border border-hairline bg-background px-3 py-2">
+        <span className="text-[10px] uppercase tracking-wider text-muted">Pays to</span>
+        <Copyable value={l.payTo} className="font-mono text-xs text-muted hover:text-foreground">{short(l.payTo)}</Copyable>
       </div>
 
       <div className="mt-4">
@@ -220,7 +264,7 @@ export default function Dashboard() {
   const [tab, setTab] = useState<Tab>('overview');
 
   const [agents, setAgents] = useState(INITIAL_AGENTS);
-  const [approvals, setApprovals] = useState(INITIAL_APPROVALS);
+  const [allowlist, setAllowlist] = useState(INITIAL_ALLOWLIST);
   const [activity, setActivity] = useState(INITIAL_ACTIVITY);
   const [added, setAdded] = useState<Record<string, boolean>>({});
 
@@ -255,13 +299,9 @@ export default function Dashboard() {
     return <Onboarding user={user} logout={logout} onDone={(name) => { try { localStorage.setItem('sovereign_org', name); } catch {} setOrg(name); }} />;
   }
 
-  const decide = (ap: (typeof INITIAL_APPROVALS)[number], ok: boolean) => {
-    setApprovals((list) => list.filter((x) => x.id !== ap.id));
-    setActivity((list) => [
-      { id: 'ev_' + Date.now(), ts: 'just now', agent: ap.agent, counterparty: ap.counterparty, amount: ap.amount, status: ok ? 'approved' : 'denied' },
-      ...list,
-    ]);
-  };
+  const setCap = (id: string, v: string) =>
+    setAllowlist((list) => list.map((w) => (w.id === id ? { ...w, cap: Number(v) || 0 } : w)));
+  const removeWl = (id: string) => setAllowlist((list) => list.filter((w) => w.id !== id));
 
   const createAgent = () => {
     if (!nName.trim()) return;
@@ -279,7 +319,7 @@ export default function Dashboard() {
     { id: 'overview', label: 'Overview' },
     { id: 'agents', label: 'Agents' },
     { id: 'marketplace', label: 'Marketplace' },
-    { id: 'approvals', label: 'Approvals' },
+    { id: 'allowlist', label: 'Allowlist' },
     { id: 'activity', label: 'Activity' },
   ];
 
@@ -287,14 +327,13 @@ export default function Dashboard() {
     <div className="flex min-h-screen">
       {/* Sidebar */}
       <aside className="flex w-60 flex-col border-r border-hairline bg-panel px-4 py-5">
-        <div className="flex items-center gap-2 px-2 text-[15px] font-semibold tracking-tight">
-          <span className="inline-block h-2 w-2 rounded-full bg-accent" />
-          Sovereign
+        <div className="px-2">
+          <Brand />
         </div>
         <nav className="mt-8 flex flex-col gap-1">
           {NAV.map((n) => {
             const on = tab === n.id;
-            const badge = n.id === 'approvals' && approvals.length ? approvals.length : null;
+            const badge = n.id === 'allowlist' && allowlist.length ? allowlist.length : null;
             return (
               <button
                 key={n.id}
@@ -309,7 +348,11 @@ export default function Dashboard() {
         </nav>
         <div className="mt-auto border-t border-hairline pt-4">
           <div className="px-3 text-sm font-medium">{org}</div>
-          <div className="truncate px-3 font-mono text-[11px] text-muted">{user?.email?.address ?? (user?.wallet?.address ? short(user.wallet.address) : 'account')}</div>
+          {user?.wallet?.address ? (
+            <div className="px-3"><Copyable value={user.wallet.address} className="font-mono text-[11px] text-muted hover:text-foreground">{short(user.wallet.address)}</Copyable></div>
+          ) : (
+            <div className="truncate px-3 font-mono text-[11px] text-muted">{user?.email?.address ?? 'account'}</div>
+          )}
           <button onClick={logout} className="mt-3 w-full rounded-lg px-3 py-2 text-left text-sm text-muted transition-colors hover:text-foreground">Sign out</button>
         </div>
       </aside>
@@ -325,24 +368,30 @@ export default function Dashboard() {
               <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <Stat label="Treasury" value="$48,250" sub="USDC on Arc" />
                 <Stat label="Active agents" value={String(activeCount)} sub={`${agents.length} total`} />
-                <Stat label="Pending approvals" value={String(approvals.length)} sub="awaiting you" />
+                <Stat label="Allowlisted" value={String(allowlist.length)} sub="trusted workers" />
                 <Stat label="Spent today" value={`$${spentToday}`} sub="across all agents" />
               </div>
               <div className="mt-8 rounded-xl border border-hairline bg-panel">
-                <div className="border-b border-hairline px-5 py-3 text-sm font-medium">Recent activity</div>
-                <div>
-                  {activity.slice(0, 5).map((e) => (
-                    <div key={e.id} className="flex items-center justify-between border-b border-hairline px-5 py-3 last:border-none text-sm">
-                      <div className="min-w-0">
-                        <div className="truncate">{e.agent} <span className="text-muted">→ {e.counterparty}</span></div>
-                        <div className="font-mono text-[11px] text-muted">{e.ts}</div>
-                      </div>
-                      <div className="flex items-center gap-4">
-                        <span className="font-mono text-sm">${e.amount}</span>
-                        <Pill kind={e.status} />
-                      </div>
-                    </div>
-                  ))}
+                <div className="flex items-center justify-between border-b border-hairline px-5 py-3">
+                  <span className="text-sm font-medium">Expenditure — last 7 days</span>
+                  <span className="font-mono text-[11px] text-muted">USDC</span>
+                </div>
+                <div className="h-64 px-4 py-4">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={DAILY_SPEND} margin={{ top: 8, right: 4, left: -4, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false} />
+                      <XAxis dataKey="day" stroke="#8a8a8a" fontSize={12} tickLine={false} axisLine={false} />
+                      <YAxis stroke="#8a8a8a" fontSize={12} tickLine={false} axisLine={false} width={60} tickFormatter={(v: number) => (v >= 1000000 ? `$${(v / 1000000).toFixed(1).replace(/\.0$/, "")}m` : v >= 1000 ? `$${(v / 1000).toFixed(1).replace(/\.0$/, "")}k` : `$${v}`)} />
+                      <Tooltip
+                        cursor={{ fill: 'rgba(255,255,255,0.04)' }}
+                        contentStyle={{ background: '#0b0d12', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 12 }}
+                        labelStyle={{ color: '#e5e5e5' }}
+                        itemStyle={{ color: '#e5e5e5' }}
+                        formatter={(v) => [`$${v}`, 'Spent']}
+                      />
+                      <Bar dataKey="usdc" fill="#2FFF00" radius={[4, 4, 0, 0]} maxBarSize={40} />
+                    </BarChart>
+                  </ResponsiveContainer>
                 </div>
               </div>
             </>
@@ -355,31 +404,9 @@ export default function Dashboard() {
                   <h1 className="text-2xl font-semibold tracking-tight">Agents</h1>
                   <p className="mt-1 text-sm text-muted">Each agent has a wallet with rules you set.</p>
                 </div>
-                <button onClick={() => setShowNew((v) => !v)} className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-black transition-opacity hover:opacity-90">New agent</button>
+                <button onClick={() => setShowNew(true)} className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-black transition-opacity hover:opacity-90">New agent</button>
               </div>
 
-              {showNew && (
-                <div className="mt-6 rounded-xl border border-hairline bg-panel p-5">
-                  <div className="grid gap-3 sm:grid-cols-3">
-                    <label className="text-sm">
-                      <span className="text-muted">Name</span>
-                      <input value={nName} onChange={(e) => setNName(e.target.value)} placeholder="e.g. Marketing Agent" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" />
-                    </label>
-                    <label className="text-sm">
-                      <span className="text-muted">Daily budget (USDC)</span>
-                      <input value={nBudget} onChange={(e) => setNBudget(e.target.value)} inputMode="numeric" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" />
-                    </label>
-                    <label className="text-sm">
-                      <span className="text-muted">Approval over (USDC)</span>
-                      <input value={nThreshold} onChange={(e) => setNThreshold(e.target.value)} inputMode="numeric" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" />
-                    </label>
-                  </div>
-                  <div className="mt-4 flex gap-3">
-                    <button onClick={createAgent} className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-black">Create</button>
-                    <button onClick={() => setShowNew(false)} className="rounded-lg px-4 py-2 text-sm text-muted hover:text-foreground">Cancel</button>
-                  </div>
-                </div>
-              )}
 
               <div className="mt-6 grid gap-3 sm:grid-cols-2">
                 {agents.map((a) => (
@@ -388,7 +415,7 @@ export default function Dashboard() {
                       <div className="font-medium">{a.name}</div>
                       <Pill kind={a.status} />
                     </div>
-                    <div className="mt-1 font-mono text-[11px] text-muted">{short(a.wallet)}</div>
+                    <Copyable value={a.wallet} className="mt-1 font-mono text-[11px] text-muted hover:text-foreground">{short(a.wallet)}</Copyable>
                     <div className="mt-4 grid grid-cols-2 gap-y-2 text-sm">
                       <div className="text-muted">Daily budget</div><div className="text-right font-mono">${a.dailyBudget}</div>
                       <div className="text-muted">Per action</div><div className="text-right font-mono">${a.perAction}</div>
@@ -413,9 +440,12 @@ export default function Dashboard() {
                 {LISTINGS.map((l) => (
                   <div key={l.id} className="rounded-xl border border-hairline bg-panel p-5">
                     <div className="flex items-start justify-between">
-                      <div>
-                        <div className="font-medium">{l.name}</div>
-                        <div className="text-xs text-muted">by {l.provider}</div>
+                      <div className="flex items-center gap-3">
+                        <Avatar name={l.provider} />
+                        <div>
+                          <div className="font-medium">{l.name}</div>
+                          <div className="text-xs text-muted">by {l.provider}</div>
+                        </div>
                       </div>
                       <button
                         onClick={() => setOpenId(l.id)}
@@ -432,41 +462,51 @@ export default function Dashboard() {
                     </div>
                     <div className="mt-4 flex items-center justify-between">
                       <span className="font-mono text-sm">from ${l.price}<span className="text-muted">/{l.unit}</span></span>
-                      <button
-                        onClick={() => setAdded((m) => ({ ...m, [l.id]: !m[l.id] }))}
-                        className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${added[l.id] ? 'border border-accent text-accent' : 'bg-accent text-black'}`}
-                      >
-                        {added[l.id] ? 'On allowlist ✓' : 'Add to allowlist'}
-                      </button>
+                      <div className="flex items-center gap-2">
+                        {l.parties < 10 && <DiversityWarning />}
+                        <button
+                          onClick={() => setAdded((m) => ({ ...m, [l.id]: true }))}
+                          disabled={!!added[l.id]}
+                          className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${added[l.id] ? 'cursor-default border border-accent text-accent opacity-70' : 'bg-accent text-black hover:opacity-90'}`}
+                        >
+                          {added[l.id] ? 'On allowlist ✓' : 'Add to allowlist'}
+                        </button>
+                      </div>
                     </div>
-                    {l.parties < 10 && <div className="mt-3 text-[11px] text-red-400">Low counterparty diversity — reputation not yet established.</div>}
                   </div>
                 ))}
               </div>
             </>
           )}
 
-          {tab === 'approvals' && (
+          {tab === 'allowlist' && (
             <>
-              <h1 className="text-2xl font-semibold tracking-tight">Approvals</h1>
-              <p className="mt-1 text-sm text-muted">Spends over an agent&apos;s limit wait here for a human.</p>
-              {approvals.length === 0 ? (
-                <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-muted">Nothing waiting. Your agents are within their limits.</div>
+              <h1 className="text-2xl font-semibold tracking-tight">Allowlist</h1>
+              <p className="mt-1 text-sm text-muted">Trusted workers your agents can pay without asking — set how much each may be paid per call.</p>
+              {allowlist.length === 0 ? (
+                <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-muted">No workers allowlisted yet. Add them from the Marketplace.</div>
               ) : (
                 <div className="mt-6 flex flex-col gap-3">
-                  {approvals.map((ap) => (
-                    <div key={ap.id} className="rounded-xl border border-hairline bg-panel p-5">
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <div className="font-medium">{ap.agent} <span className="text-muted">→ {ap.counterparty}</span></div>
-                          <div className="mt-1 text-sm text-muted">{ap.reason}</div>
-                          <div className="mt-1 font-mono text-[11px] text-muted">{ap.ts}</div>
+                  {allowlist.map((w) => (
+                    <div key={w.id} className="rounded-xl border border-hairline bg-panel p-5">
+                      <div className="flex flex-wrap items-center justify-between gap-4">
+                        <div className="flex min-w-0 items-center gap-3">
+                          <Avatar name={w.name.split('·')[0].trim()} />
+                          <div className="min-w-0">
+                            <div className="truncate font-medium">{w.name}</div>
+                            <Copyable value={w.address} className="mt-1 font-mono text-[11px] text-muted hover:text-foreground">{short(w.address)}</Copyable>
+                          </div>
                         </div>
-                        <div className="font-mono text-lg">${ap.amount}</div>
-                      </div>
-                      <div className="mt-4 flex gap-3">
-                        <button onClick={() => decide(ap, true)} className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-black">Approve</button>
-                        <button onClick={() => decide(ap, false)} className="rounded-lg border border-hairline px-4 py-2 text-sm text-muted hover:text-foreground">Deny</button>
+                        <div className="flex items-center gap-3">
+                          <label className="flex items-center gap-2 text-sm">
+                            <span className="text-muted">Daily limit per call</span>
+                            <span className="flex items-center rounded-lg border border-hairline bg-background pl-2 focus-within:border-accent">
+                              <span className="text-sm text-muted">$</span>
+                              <input value={String(w.cap)} onChange={(e) => setCap(w.id, e.target.value)} inputMode="decimal" className="w-16 bg-transparent px-1.5 py-1.5 text-sm outline-none" />
+                            </span>
+                          </label>
+                          <button onClick={() => removeWl(w.id)} className="text-sm text-muted transition-colors hover:text-red-400">Remove</button>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -510,13 +550,47 @@ export default function Dashboard() {
               </svg>
             </button>
             <McpDetails l={openListing} />
-            <button
-              onClick={() => setAdded((m) => ({ ...m, [openListing.id]: !m[openListing.id] }))}
-              className={`mt-5 w-full rounded-lg px-4 py-2.5 text-sm font-medium transition-colors ${added[openListing.id] ? 'border border-accent text-accent' : 'bg-accent text-black'}`}
-            >
-              {added[openListing.id] ? 'On allowlist ✓' : 'Add to allowlist'}
+            <div className="mt-5 flex items-center gap-2">
+              {openListing.parties < 10 && <DiversityWarning />}
+              <button
+                onClick={() => setAdded((m) => ({ ...m, [openListing.id]: true }))}
+                disabled={!!added[openListing.id]}
+                className={`flex-1 rounded-lg px-4 py-2.5 text-sm font-medium transition-colors ${added[openListing.id] ? 'cursor-default border border-accent text-accent opacity-70' : 'bg-accent text-black hover:opacity-90'}`}
+              >
+                {added[openListing.id] ? 'On allowlist ✓' : 'Add to allowlist'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New agent modal */}
+      {showNew && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-6" onClick={() => setShowNew(false)}>
+          <div className="relative w-full max-w-md rounded-2xl border border-hairline bg-panel p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <button onClick={() => setShowNew(false)} aria-label="Close" className="absolute right-4 top-4 text-muted transition-colors hover:text-foreground">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="6" y1="6" x2="18" y2="18" /><line x1="18" y1="6" x2="6" y2="18" /></svg>
             </button>
-            {openListing.parties < 10 && <div className="mt-3 text-[11px] text-red-400">Low counterparty diversity — reputation not yet established.</div>}
+            <h2 className="text-lg font-semibold tracking-tight">New agent</h2>
+            <p className="mt-1 text-sm text-muted">Give it a wallet and the rules it spends under.</p>
+            <div className="mt-5 flex flex-col gap-3">
+              <label className="text-sm">
+                <span className="text-muted">Name</span>
+                <input autoFocus value={nName} onChange={(e) => setNName(e.target.value)} placeholder="e.g. Marketing Agent" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" />
+              </label>
+              <label className="text-sm">
+                <span className="text-muted">Daily budget (USDC)</span>
+                <input value={nBudget} onChange={(e) => setNBudget(e.target.value)} inputMode="numeric" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" />
+              </label>
+              <label className="text-sm">
+                <span className="text-muted">Approval over (USDC)</span>
+                <input value={nThreshold} onChange={(e) => setNThreshold(e.target.value)} inputMode="numeric" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" />
+              </label>
+            </div>
+            <div className="mt-5 flex gap-3">
+              <button onClick={createAgent} className="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black">Create agent</button>
+              <button onClick={() => setShowNew(false)} className="rounded-lg border border-hairline px-4 py-2.5 text-sm text-muted hover:text-foreground">Cancel</button>
+            </div>
           </div>
         </div>
       )}
@@ -529,10 +603,7 @@ function Onboarding({ user, logout, onDone }: { user: any; logout: () => void; o
   return (
     <div className="flex min-h-screen items-center justify-center px-6">
       <div className="w-full max-w-md rounded-2xl border border-hairline bg-panel p-7">
-        <div className="flex items-center gap-2 text-[15px] font-semibold tracking-tight">
-          <span className="inline-block h-2 w-2 rounded-full bg-accent" />
-          Sovereign
-        </div>
+        <Brand />
         <h1 className="mt-6 text-xl font-semibold tracking-tight">Create your organization</h1>
         <p className="mt-2 text-sm text-muted">This is the account your agents and their spending rules live under.</p>
         <label className="mt-6 block text-sm">
@@ -541,7 +612,11 @@ function Onboarding({ user, logout, onDone }: { user: any; logout: () => void; o
         </label>
         <div className="mt-3 rounded-lg border border-hairline bg-background px-3 py-2.5 text-sm">
           <div className="text-[11px] uppercase tracking-wider text-muted">Treasury wallet</div>
-          <div className="mt-0.5 font-mono text-xs">{user?.wallet?.address ? user.wallet.address : 'created on continue'}</div>
+          {user?.wallet?.address ? (
+            <Copyable value={user.wallet.address} className="mt-0.5 break-all font-mono text-xs hover:text-foreground">{user.wallet.address}</Copyable>
+          ) : (
+            <div className="mt-0.5 font-mono text-xs text-muted">created on continue</div>
+          )}
         </div>
         <button disabled={!name.trim()} onClick={() => onDone(name.trim())} className="mt-6 w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40">
           Continue

@@ -1,19 +1,16 @@
 'use client'
 
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import { usePrivy } from '@privy-io/react-auth';
 import { useRouter } from 'next/navigation';
 
 // Components
 import DepthCarousel from './components/DepthCarousel';
-import SovereignMark from './components/SovereignMark';
+import Brand from './components/Brand';
+import Copyable from './components/Copyable';
 // PixelBlast is WebGL — load client-only so it mounts into a sized container (no blank SSR canvas)
 const PixelBlast = dynamic(() => import('./components/PixelBlast'), { ssr: false }) as any;
-
-// Images
-import Image from 'next/image'
-import logoTransparent from '../public/logo_transparent.png'
 
 const FEATURES = [
   { n: '01', t: 'Set the rules once', d: 'Give each agent a budget, an allowlist, and an approval threshold.', img: '/features/rules.gif' },
@@ -35,21 +32,17 @@ export default function Home() {
     else login();
   };
 
+  // On successful login, go straight to the dashboard.
+  useEffect(() => {
+    if (ready && authenticated) router.replace('/dashboard');
+  }, [ready, authenticated, router]);
+
   return (
     <>
       <div aria-hidden />
 
       <header className="mx-auto flex max-w-5xl items-center justify-between px-6 py-5">
-        <div className="flex items-center text-[15px] font-semibold tracking-tight">
-          <Image
-            src={logoTransparent}
-            alt='Logo with text Sovereign'
-            width={36}
-            height={36} />
-          <p className="mt-1 mx-2 text-lg">
-            Sovereign
-          </p>
-        </div>
+        <Brand />
         <button onClick={go} className="text-sm text-muted transition-colors hover:text-foreground">
           {authenticated ? 'Dashboard' : 'Sign in'}
         </button>
@@ -61,12 +54,22 @@ export default function Home() {
           {/* Left: text */}
           <div className="flex-1 w-full">
             <h1 className="text-xl font-semibold leading-[1.05] tracking-tight sm:text-4xl">
-              With <SovereignMark />,<br/> agents pay for you,<br/> you control the action.
+              Agents pay for you,<br/> you control the action.
             </h1>
             <p className="mt-6 max-w-md text-base leading-relaxed text-muted sm:text-lg">
               Sovereign gives every AI agent a wallet with rules. With budgets, allowlists, approvals, it
               transacts on its own without going off the rails.
             </p>
+            <div className="mt-6 flex flex-wrap items-center gap-3">
+              <Copyable
+                value="npm i sovereign-mcp"
+                copiedLabel="copied — npm i sovereign-mcp"
+                className="rounded-lg border border-hairline bg-panel px-3 py-2 font-mono text-xs text-muted transition-colors hover:text-foreground"
+              >
+                <span className="text-accent">$</span>&nbsp;npm i sovereign-mcp
+              </Copyable>
+              <a href="https://www.npmjs.com/package/sovereign-mcp" target="_blank" rel="noreferrer" className="text-xs text-muted underline underline-offset-2 hover:text-foreground">View on npm ↗</a>
+            </div>
             <div className="mt-9 flex items-center gap-5">
               <button
                 onClick={go}
