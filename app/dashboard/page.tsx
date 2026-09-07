@@ -7,6 +7,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGri
 import Brand from '../components/Brand';
 import Copyable from '../components/Copyable';
 import Avatar from '../components/Avatar';
+import Cover from '../components/Cover';
 
 type Tab = 'overview' | 'agents' | 'marketplace' | 'allowlist' | 'activity';
 
@@ -19,9 +20,9 @@ const INITIAL_AGENTS = [
 ];
 
 const INITIAL_ALLOWLIST = [
-  { id: 'wl_1', name: 'ChainMetrics · On-chain Data Agent', address: '0x3b12aa77c0e4d5a9c3f2b8e1d0447a2f9c6b1e30', cap: 5 },
-  { id: 'wl_2', name: 'Sentinel Labs · Address Risk Agent', address: '0x9e51c204be55aa20c1e8f3aa771d004be55aa20c', cap: 20 },
-  { id: 'wl_3', name: 'Arrakis · Liquidity Intel Agent', address: '0x77a0e1730af4b902dd512c88e1730af4b902dd51', cap: 2 },
+  { id: 'wl_1', listingId: 'ls_1', name: 'On-chain Data Agent', address: '0x3b12aa77c0e4d5a9c3f2b8e1d0447a2f9c6b1e30', cap: 5 },
+  { id: 'wl_2', listingId: 'ls_2', name: 'Address Risk Agent', address: '0x9e51c204be55aa20c1e8f3aa771d004be55aa20c', cap: 20 },
+  { id: 'wl_3', listingId: 'ls_3', name: 'Liquidity Intel Agent', address: '0x77a0e1730af4b902dd512c88e1730af4b902dd51', cap: 2 },
 ];
 
 const INITIAL_ACTIVITY = [
@@ -33,7 +34,7 @@ const INITIAL_ACTIVITY = [
 
 type Listing = {
   id: string;
-  provider: string;
+  sellerId: string;
   name: string;
   price: string;
   unit: string;
@@ -43,11 +44,11 @@ type Listing = {
   parties: number;
   summary: string;
   payTo: string;
+  cover?: string;
   mcp: {
     endpoint: string;
     transport: string;
     version: string;
-    tools: { name: string; desc: string; price: string }[];
   };
 };
 
@@ -63,98 +64,17 @@ const DAILY_SPEND = [
   { day: 'Sun', usdc: 100 },
 ];
 
+const SELLERS: Record<string, { id: string; name: string; worldId: string }> = {
+  sel_maya: { id: 'sel_maya', name: 'Maya Chen', worldId: '0x1f3a9c77e0b4d5a9c3f2b8e1d0447a2f9c6b1e302a77c0e4d5a9c3f2b8e1d044' },
+  sel_dev: { id: 'sel_dev', name: 'Devansh Rao', worldId: '0x9e51c204be55aa20c1e8f3aa771d004be55aa20c1e8f3aa771d004be55aa20c1' },
+  sel_lena: { id: 'sel_lena', name: 'Lena Fischer', worldId: '0x77a0e1730af4b902dd512c88e1730af4b902dd512c88e1730af4b902dd512c88' },
+};
+
 const LISTINGS: Listing[] = [
-  {
-    id: 'ls_1',
-    provider: 'ChainMetrics',
-    name: 'On-chain Data Agent',
-    price: '0.05',
-    unit: 'call',
-    jobs: 842,
-    success: 99.2,
-    stake: 500,
-    parties: 61,
-    summary: 'Live wallet, token, and protocol intelligence for any EVM address.',
-    payTo: '0x3b12aa77c0e4d5a9c3f2b8e1d0447a2f9c6b1e30',
-    mcp: {
-      endpoint: 'https://mcp.chainmetrics.xyz/sse',
-      transport: 'HTTP + x402',
-      version: '2025-06-18',
-      tools: [
-        { name: 'query_address', desc: 'Full on-chain profile for any address', price: '0.05' },
-        { name: 'label_cluster', desc: 'Entity clustering and known-actor labels', price: '0.08' },
-        { name: 'token_flows', desc: 'Inbound/outbound token flow over a window', price: '0.06' },
-      ],
-    },
-  },
-  {
-    id: 'ls_2',
-    provider: 'Sentinel Labs',
-    name: 'Address Risk Agent',
-    price: '12',
-    unit: 'job',
-    jobs: 311,
-    success: 97.5,
-    stake: 1000,
-    parties: 44,
-    summary: 'Sanctions, mixer, and exploit exposure scoring before you transact.',
-    payTo: '0x9e51c204be55aa20c1e8f3aa771d004be55aa20c',
-    mcp: {
-      endpoint: 'https://api.sentinel.sh/mcp',
-      transport: 'HTTP + x402',
-      version: '2025-06-18',
-      tools: [
-        { name: 'risk_score', desc: 'Composite 0–100 risk score with reasons', price: '12' },
-        { name: 'sanctions_check', desc: 'OFAC / global sanctions list match', price: '4' },
-        { name: 'exposure_path', desc: 'Trace path to a flagged source', price: '18' },
-      ],
-    },
-  },
-  {
-    id: 'ls_3',
-    provider: 'Arrakis',
-    name: 'Liquidity Intel Agent',
-    price: '0.02',
-    unit: 'call',
-    jobs: 1290,
-    success: 99.8,
-    stake: 750,
-    parties: 88,
-    summary: 'Real-time DEX depth, slippage, and LP position snapshots.',
-    payTo: '0x77a0e1730af4b902dd512c88e1730af4b902dd51',
-    mcp: {
-      endpoint: 'https://mcp.arrakis.fi/v1',
-      transport: 'HTTP + x402',
-      version: '2025-06-18',
-      tools: [
-        { name: 'pool_snapshot', desc: 'Depth, TVL, and fee tier for a pool', price: '0.02' },
-        { name: 'slippage_quote', desc: 'Expected slippage for a trade size', price: '0.02' },
-        { name: 'lp_positions', desc: 'Open LP positions for an address', price: '0.03' },
-      ],
-    },
-  },
-  {
-    id: 'ls_4',
-    provider: 'Fresh Vault',
-    name: 'Compliance Playbook Agent',
-    price: '0.10',
-    unit: 'call',
-    jobs: 12,
-    success: 100,
-    stake: 100,
-    parties: 3,
-    summary: 'SOC 2 / ISO control lookups and audit-evidence drafting.',
-    payTo: '0x0c44be55aa20c1e8f371d004be55aa20c1e8f371',
-    mcp: {
-      endpoint: 'https://freshvault.dev/mcp',
-      transport: 'HTTP + x402',
-      version: '2025-06-18',
-      tools: [
-        { name: 'control_lookup', desc: 'Map a requirement to SOC 2 / ISO controls', price: '0.10' },
-        { name: 'evidence_draft', desc: 'Draft audit evidence for a control', price: '0.15' },
-      ],
-    },
-  },
+  { id: 'ls_1', sellerId: 'sel_maya', name: 'On-chain Data Agent', price: '0.05', unit: 'call', jobs: 842, success: 99.2, stake: 500, parties: 61, summary: 'Live wallet, token, and protocol intelligence for any EVM address.', payTo: '0x3b12aa77c0e4d5a9c3f2b8e1d0447a2f9c6b1e30', mcp: { endpoint: 'https://mcp.chainmetrics.xyz/sse', transport: 'HTTP + x402', version: '2025-06-18' } },
+  { id: 'ls_2', sellerId: 'sel_dev', name: 'Address Risk Agent', price: '12', unit: 'job', jobs: 311, success: 97.5, stake: 1000, parties: 44, summary: 'Sanctions, mixer, and exploit exposure scoring before you transact.', payTo: '0x9e51c204be55aa20c1e8f3aa771d004be55aa20c', mcp: { endpoint: 'https://api.sentinel.sh/mcp', transport: 'HTTP + x402', version: '2025-06-18' } },
+  { id: 'ls_3', sellerId: 'sel_maya', name: 'Liquidity Intel Agent', price: '0.02', unit: 'call', jobs: 1290, success: 99.8, stake: 750, parties: 88, summary: 'Real-time DEX depth, slippage, and LP position snapshots.', payTo: '0x77a0e1730af4b902dd512c88e1730af4b902dd51', mcp: { endpoint: 'https://mcp.arrakis.fi/v1', transport: 'HTTP + x402', version: '2025-06-18' } },
+  { id: 'ls_4', sellerId: 'sel_lena', name: 'Compliance Playbook Agent', price: '0.10', unit: 'call', jobs: 12, success: 100, stake: 100, parties: 3, summary: 'SOC 2 / ISO control lookups and audit-evidence drafting.', payTo: '0x0c44be55aa20c1e8f371d004be55aa20c1e8f371', mcp: { endpoint: 'https://freshvault.dev/mcp', transport: 'HTTP + x402', version: '2025-06-18' } },
 ];
 
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
@@ -215,10 +135,10 @@ function McpDetails({ l }: { l: Listing }) {
   return (
     <>
       <div className="flex items-center gap-3">
-        <Avatar name={l.provider} size={40} />
+        <Avatar name={SELLERS[l.sellerId].name} size={40} />
         <div>
           <div className="font-medium">{l.name}</div>
-          <div className="text-xs text-muted">by {l.provider}</div>
+          <div className="text-xs text-muted">by {SELLERS[l.sellerId].name}</div>
         </div>
       </div>
       <p className="mt-3 text-sm text-muted">{l.summary}</p>
@@ -237,20 +157,6 @@ function McpDetails({ l }: { l: Listing }) {
         <Copyable value={l.payTo} className="font-mono text-xs text-muted hover:text-foreground">{short(l.payTo)}</Copyable>
       </div>
 
-      <div className="mt-4">
-        <div className="text-[10px] uppercase tracking-wider text-muted">Tools · {l.mcp.tools.length}</div>
-        <div className="mt-2 flex flex-col gap-2">
-          {l.mcp.tools.map((t) => (
-            <div key={t.name} className="flex items-start justify-between gap-3 rounded-lg border border-hairline bg-background px-3 py-2">
-              <div className="min-w-0">
-                <div className="font-mono text-xs">{t.name}</div>
-                <div className="mt-0.5 text-[11px] text-muted">{t.desc}</div>
-              </div>
-              <div className="shrink-0 font-mono text-xs">${t.price}</div>
-            </div>
-          ))}
-        </div>
-      </div>
     </>
   );
 }
@@ -270,6 +176,9 @@ export default function Dashboard() {
 
   // marketplace detail modal
   const [openId, setOpenId] = useState<string | null>(null);
+  const [sellerId, setSellerId] = useState<string | null>(null);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [q, setQ] = useState('');
 
   // create-agent form
   const [showNew, setShowNew] = useState(false);
@@ -314,6 +223,11 @@ export default function Dashboard() {
   };
 
   const openListing = LISTINGS.find((l) => l.id === openId) || null;
+  const confirmListing = LISTINGS.find((l) => l.id === confirmId) || null;
+  const filtered = LISTINGS.filter((l) => (l.name + ' ' + l.summary + ' ' + SELLERS[l.sellerId].name).toLowerCase().includes(q.trim().toLowerCase()));
+  const toggleAgent = (id: string) => setAgents((list) => list.map((a) => (a.id === id ? { ...a, status: a.status === 'active' ? 'paused' : 'active' } : a)));
+  const requestAdd = (l: Listing) => { if (l.parties < 10) setConfirmId(l.id); else setAdded((m) => ({ ...m, [l.id]: true })); };
+  const doAdd = (id: string) => { setAdded((m) => ({ ...m, [id]: true })); setConfirmId(null); };
 
   const NAV: { id: Tab; label: string }[] = [
     { id: 'overview', label: 'Overview' },
@@ -337,7 +251,7 @@ export default function Dashboard() {
             return (
               <button
                 key={n.id}
-                onClick={() => setTab(n.id)}
+                onClick={() => { setTab(n.id); setSellerId(null); }}
                 className={`flex items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors ${on ? 'bg-[#1c1c1c] text-foreground' : 'text-muted hover:text-foreground'}`}
               >
                 <span>{n.label}</span>
@@ -353,7 +267,8 @@ export default function Dashboard() {
           ) : (
             <div className="truncate px-3 font-mono text-[11px] text-muted">{user?.email?.address ?? 'account'}</div>
           )}
-          <button onClick={logout} className="mt-3 w-full rounded-lg px-3 py-2 text-left text-sm text-muted transition-colors hover:text-foreground">Sign out</button>
+          <button onClick={() => router.push('/seller')} className="mt-3 w-full rounded-lg px-3 py-2 text-left text-sm text-muted transition-colors hover:text-foreground">Switch to selling →</button>
+          <button onClick={logout} className="mt-1 w-full rounded-lg px-3 py-2 text-left text-sm text-muted transition-colors hover:text-foreground">Sign out</button>
         </div>
       </aside>
 
@@ -426,6 +341,11 @@ export default function Dashboard() {
                       <div className="h-full rounded-full bg-accent" style={{ width: `${Math.min(100, (a.spentToday / a.dailyBudget) * 100 || 0)}%` }} />
                     </div>
                     <div className="mt-1 text-[11px] text-muted">${a.spentToday} of ${a.dailyBudget} today</div>
+                    <div className="mt-4 rounded-lg border border-hairline bg-background px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-wider text-muted">Connect this agent to Claude</div>
+                      <Copyable value={`claude mcp add sovereign --transport http https://mcp.sovereign.sh -H "x-agent-token: sk_${a.id}"`} className="mt-1 break-all font-mono text-[11px] text-muted hover:text-foreground">claude mcp add sovereign … sk_{a.id}</Copyable>
+                    </div>
+                    <button onClick={() => toggleAgent(a.id)} className="mt-3 w-full rounded-lg border border-hairline px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground">{a.status === 'active' ? 'Pause agent' : 'Resume agent'}</button>
                   </div>
                 ))}
               </div>
@@ -434,17 +354,55 @@ export default function Dashboard() {
 
           {tab === 'marketplace' && (
             <>
+              {sellerId ? (
+                <>
+                  <button onClick={() => setSellerId(null)} className="text-sm text-muted transition-colors hover:text-foreground">← Back to marketplace</button>
+                  <div className="mt-4 flex items-center gap-4">
+                    <Avatar name={SELLERS[sellerId].name} size={56} />
+                    <div>
+                      <h1 className="text-2xl font-semibold tracking-tight">{SELLERS[sellerId].name}</h1>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+                        <span className="inline-flex items-center gap-1 text-accent"><span className="inline-block h-1.5 w-1.5 rounded-full bg-accent" />World ID verified</span>
+                        <Copyable value={SELLERS[sellerId].worldId} className="font-mono text-muted hover:text-foreground">{short(SELLERS[sellerId].worldId)}</Copyable>
+                      </div>
+                    </div>
+                  </div>
+                  <p className="mt-6 text-sm text-muted">Agents released by {SELLERS[sellerId].name}</p>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    {LISTINGS.filter((l) => l.sellerId === sellerId).map((l) => (
+                      <div key={l.id} className="overflow-hidden rounded-xl border border-hairline bg-panel">
+                        <Cover name={l.name} image={l.cover} />
+                        <div className="p-5">
+                          <div className="font-medium">{l.name}</div>
+                          <div className="mt-1 truncate text-xs text-muted">{l.summary}</div>
+                          <div className="mt-4 flex items-center justify-between">
+                            <span className="font-mono text-sm">from ${l.price}<span className="text-muted">/{l.unit}</span></span>
+                            <button onClick={() => setOpenId(l.id)} className="inline-flex items-center gap-1 text-sm text-muted transition-colors hover:text-foreground">Details<ArrowUpRight /></button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <>
               <h1 className="text-2xl font-semibold tracking-tight">Marketplace</h1>
               <p className="mt-1 text-sm text-muted">Agents your agents can hire — ranked by on-chain reputation.</p>
-              <div className="mt-6 grid gap-3 sm:grid-cols-2">
-                {LISTINGS.map((l) => (
-                  <div key={l.id} className="rounded-xl border border-hairline bg-panel p-5">
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search agents…" className="mt-6 w-full rounded-lg border border-hairline bg-background px-3 py-2.5 text-sm outline-none focus:border-accent" />
+              {filtered.length === 0 && <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-muted">No agents match “{q}”.</div>}
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                {filtered.map((l) => (
+                  <div key={l.id} className="overflow-hidden rounded-xl border border-hairline bg-panel">
+                    <Cover name={l.name} image={l.cover} />
+                    <div className="p-5">
                     <div className="flex items-start justify-between">
                       <div className="flex items-center gap-3">
-                        <Avatar name={l.provider} />
+                        <button onClick={() => setSellerId(l.sellerId)} aria-label="View seller profile" className="shrink-0">
+                          <Avatar name={SELLERS[l.sellerId].name} />
+                        </button>
                         <div>
                           <div className="font-medium">{l.name}</div>
-                          <div className="text-xs text-muted">by {l.provider}</div>
+                          <div className="text-xs text-muted">by <button onClick={() => setSellerId(l.sellerId)} className="underline underline-offset-2 hover:text-foreground">{SELLERS[l.sellerId].name}</button></div>
                         </div>
                       </div>
                       <button
@@ -465,7 +423,7 @@ export default function Dashboard() {
                       <div className="flex items-center gap-2">
                         {l.parties < 10 && <DiversityWarning />}
                         <button
-                          onClick={() => setAdded((m) => ({ ...m, [l.id]: true }))}
+                          onClick={() => requestAdd(l)}
                           disabled={!!added[l.id]}
                           className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${added[l.id] ? 'cursor-default border border-accent text-accent opacity-70' : 'bg-accent text-black hover:opacity-90'}`}
                         >
@@ -473,9 +431,12 @@ export default function Dashboard() {
                         </button>
                       </div>
                     </div>
+                    </div>
                   </div>
                 ))}
               </div>
+                </>
+              )}
             </>
           )}
 
@@ -491,7 +452,7 @@ export default function Dashboard() {
                     <div key={w.id} className="rounded-xl border border-hairline bg-panel p-5">
                       <div className="flex flex-wrap items-center justify-between gap-4">
                         <div className="flex min-w-0 items-center gap-3">
-                          <Avatar name={w.name.split('·')[0].trim()} />
+                          <Avatar name={w.name} />
                           <div className="min-w-0">
                             <div className="truncate font-medium">{w.name}</div>
                             <Copyable value={w.address} className="mt-1 font-mono text-[11px] text-muted hover:text-foreground">{short(w.address)}</Copyable>
@@ -505,6 +466,7 @@ export default function Dashboard() {
                               <input value={String(w.cap)} onChange={(e) => setCap(w.id, e.target.value)} inputMode="decimal" className="w-16 bg-transparent px-1.5 py-1.5 text-sm outline-none" />
                             </span>
                           </label>
+                          <button onClick={() => setOpenId(w.listingId)} className="inline-flex items-center gap-1 text-sm text-muted transition-colors hover:text-foreground">Details<ArrowUpRight /></button>
                           <button onClick={() => removeWl(w.id)} className="text-sm text-muted transition-colors hover:text-red-400">Remove</button>
                         </div>
                       </div>
@@ -553,12 +515,29 @@ export default function Dashboard() {
             <div className="mt-5 flex items-center gap-2">
               {openListing.parties < 10 && <DiversityWarning />}
               <button
-                onClick={() => setAdded((m) => ({ ...m, [openListing.id]: true }))}
+                onClick={() => requestAdd(openListing)}
                 disabled={!!added[openListing.id]}
                 className={`flex-1 rounded-lg px-4 py-2.5 text-sm font-medium transition-colors ${added[openListing.id] ? 'cursor-default border border-accent text-accent opacity-70' : 'bg-accent text-black hover:opacity-90'}`}
               >
                 {added[openListing.id] ? 'On allowlist ✓' : 'Add to allowlist'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Low-reputation confirm */}
+      {confirmListing && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 px-6" onClick={() => setConfirmId(null)}>
+          <div className="w-full max-w-sm rounded-2xl border border-hairline bg-panel p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2" style={{ color: '#f59e0b' }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></svg>
+              <span className="text-sm font-semibold">Low reputation</span>
+            </div>
+            <p className="mt-3 text-sm text-muted"><span className="text-foreground">{confirmListing.name}</span> has low counterparty diversity — its reputation isn&apos;t established yet. Add it to your allowlist anyway?</p>
+            <div className="mt-5 flex gap-3">
+              <button onClick={() => doAdd(confirmListing.id)} className="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black">Add anyway</button>
+              <button onClick={() => setConfirmId(null)} className="rounded-lg border border-hairline px-4 py-2.5 text-sm text-muted hover:text-foreground">Cancel</button>
             </div>
           </div>
         </div>

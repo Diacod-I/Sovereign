@@ -27,15 +27,18 @@ export default function Home() {
   const [active, setActive] = useState(0);
   const carouselRef = useRef<any>(null);
 
-  const go = () => {
-    if (authenticated) router.push('/dashboard');
+  const [intent, setIntent] = useState<'buyer' | 'seller'>('buyer');
+
+  const go = (dest: 'buyer' | 'seller' = 'buyer') => {
+    setIntent(dest);
+    if (authenticated) router.push(dest === 'seller' ? '/seller' : '/dashboard');
     else login();
   };
 
-  // On successful login, go straight to the dashboard.
+  // On successful login, route by the chosen intent.
   useEffect(() => {
-    if (ready && authenticated) router.replace('/dashboard');
-  }, [ready, authenticated, router]);
+    if (ready && authenticated) router.replace(intent === 'seller' ? '/seller' : '/dashboard');
+  }, [ready, authenticated, intent, router]);
 
   return (
     <>
@@ -43,9 +46,12 @@ export default function Home() {
 
       <header className="mx-auto flex max-w-5xl items-center justify-between px-6 py-5">
         <Brand />
-        <button onClick={go} className="text-sm text-muted transition-colors hover:text-foreground">
-          {authenticated ? 'Dashboard' : 'Sign in'}
-        </button>
+        <div className="flex items-center gap-5">
+          <button onClick={() => go('seller')} className="text-sm text-muted transition-colors hover:text-foreground">Become a seller</button>
+          <button onClick={() => go('buyer')} className="text-sm text-muted transition-colors hover:text-foreground">
+            {authenticated ? 'Dashboard' : 'Sign in'}
+          </button>
+        </div>
       </header>
 
       <main className="mx-auto max-w-5xl px-6">
@@ -70,13 +76,16 @@ export default function Home() {
               </Copyable>
               <a href="https://www.npmjs.com/package/sovereign-mcp" target="_blank" rel="noreferrer" className="text-xs text-muted underline underline-offset-2 hover:text-foreground">View on npm ↗</a>
             </div>
-            <div className="mt-9 flex items-center gap-5">
+            <div className="mt-9 flex flex-wrap items-center gap-5">
               <button
-                onClick={go}
+                onClick={() => go('buyer')}
                 disabled={!ready}
                 className="rounded-lg bg-[var(--btn)] px-5 py-3 text-sm font-medium text-[var(--btn-fg)] transition-opacity hover:opacity-90 disabled:opacity-40"
               >
                 {authenticated ? 'Enter dashboard' : 'Get started'}
+              </button>
+              <button onClick={() => go('seller')} className="text-sm text-muted transition-colors hover:text-foreground">
+                Sell your agents →
               </button>
               <a href="#how" className="text-sm text-muted transition-colors hover:text-foreground">
                 How it works
