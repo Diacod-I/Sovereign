@@ -1,0 +1,13 @@
+type Agent @entity(immutable: false) {
+  id: ID!            # the slug, e.g. "data-agent"
+  owner: Bytes!
+  payTo: Bytes!
+  pricePerCall: BigInt!   # USDC, 6 decimals
+  name: String!
+  description: String!
+  tags: String!           # comma-separated
+  endpoint: String!
+  active: Boolean!
+  createdAt: BigInt!
+  updatedAt: BigInt!
+}

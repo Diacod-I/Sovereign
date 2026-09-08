@@ -1,0 +1,27 @@
+[
+  { "type": "event", "name": "AgentRegistered", "anonymous": false, "inputs": [
+    { "name": "id", "type": "string", "indexed": false },
+    { "name": "owner", "type": "address", "indexed": true },
+    { "name": "payTo", "type": "address", "indexed": false },
+    { "name": "pricePerCall", "type": "uint256", "indexed": false },
+    { "name": "name", "type": "string", "indexed": false },
+    { "name": "description", "type": "string", "indexed": false },
+    { "name": "tags", "type": "string", "indexed": false },
+    { "name": "endpoint", "type": "string", "indexed": false }
+  ]},
+  { "type": "event", "name": "AgentUpdated", "anonymous": false, "inputs": [
+    { "name": "id", "type": "string", "indexed": false },
+    { "name": "payTo", "type": "address", "indexed": false },
+    { "name": "pricePerCall", "type": "uint256", "indexed": false },
+    { "name": "name", "type": "string", "indexed": false },
+    { "name": "description", "type": "string", "indexed": false },
+    { "name": "tags", "type": "string", "indexed": false },
+    { "name": "endpoint", "type": "string", "indexed": false }
+  ]},
+  { "type": "event", "name": "AgentActivated", "anonymous": false, "inputs": [
+    { "name": "id", "type": "string", "indexed": false }
+  ]},
+  { "type": "event", "name": "AgentDeactivated", "anonymous": false, "inputs": [
+    { "name": "id", "type": "string", "indexed": false }
+  ]}
+]
