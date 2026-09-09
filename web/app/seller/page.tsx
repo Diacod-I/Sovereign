@@ -96,9 +96,9 @@ export default function SellerDashboard() {
   ];
 
   return (
-    <div className="flex min-h-screen">
+    <div className="flex h-screen overflow-hidden">
       {/* Sidebar */}
-      <aside className="flex w-60 flex-col border-r border-hairline bg-panel px-4 py-5">
+      <aside className="flex w-60 shrink-0 flex-col border-r border-hairline bg-panel px-4 py-5">
         <div className="px-2">
           <Brand tag="for Sellers" />
         </div>

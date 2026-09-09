@@ -7,9 +7,9 @@ dataSources:
     # Confirm this slug in Subgraph Studio when you create the subgraph.
     network: arc-testnet
     source:
-      address: "0xREPLACE_WITH_DEPLOYED_REGISTRY"
+      address: "0x5E20F2ffE4f7C1a27412D53ab5C248bfef921A75"
       abi: AgentRegistry
-      startBlock: 0  # set to the block the Registry was deployed in
+      startBlock: 61082151
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9

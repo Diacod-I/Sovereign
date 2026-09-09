@@ -8,7 +8,7 @@ export default function Brand({ size = 28, tag }: { size?: number; tag?: string 
     <div className="flex items-center gap-2">
       <Image src={logo} alt="Sovereign logo" width={size} height={size} priority />
       <span className="flex items-baseline gap-1.5">
-        <span className="brand-word text-lg tracking-tight">Sovereign</span>
+        <span className="brand-word text-lg mt-2 tracking-tight">Sovereign</span>
         {tag && <span className="brand-word text-xs text-muted">{tag}</span>}
       </span>
     </div>

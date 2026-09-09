@@ -9,7 +9,7 @@ import Copyable from '../components/Copyable';
 import Avatar from '../components/Avatar';
 import Cover from '../components/Cover';
 
-type Tab = 'overview' | 'agents' | 'marketplace' | 'allowlist' | 'activity';
+type Tab = 'overview' | 'agents' | 'marketplace' | 'allowlist';
 
 const short = (a: string) => a.slice(0, 6) + '…' + a.slice(-4);
 
@@ -234,13 +234,12 @@ export default function Dashboard() {
     { id: 'agents', label: 'Agents' },
     { id: 'marketplace', label: 'Marketplace' },
     { id: 'allowlist', label: 'Allowlist' },
-    { id: 'activity', label: 'Activity' },
   ];
 
   return (
-    <div className="flex min-h-screen">
+    <div className="flex h-screen overflow-hidden">
       {/* Sidebar */}
-      <aside className="flex w-60 flex-col border-r border-hairline bg-panel px-4 py-5">
+      <aside className="flex w-60 shrink-0 flex-col border-r border-hairline bg-panel px-4 py-5">
         <div className="px-2">
           <Brand />
         </div>
@@ -280,11 +279,10 @@ export default function Dashboard() {
             <>
               <h1 className="text-2xl font-semibold tracking-tight">Overview</h1>
               <p className="mt-1 text-sm text-muted">Everything your agents are spending, under your rules.</p>
-              <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <Stat label="Treasury" value="$48,250" sub="USDC on Arc" />
                 <Stat label="Active agents" value={String(activeCount)} sub={`${agents.length} total`} />
                 <Stat label="Allowlisted" value={String(allowlist.length)} sub="trusted workers" />
-                <Stat label="Spent today" value={`$${spentToday}`} sub="across all agents" />
               </div>
               <div className="mt-8 rounded-xl border border-hairline bg-panel">
                 <div className="flex items-center justify-between border-b border-hairline px-5 py-3">
@@ -308,6 +306,21 @@ export default function Dashboard() {
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
+              </div>
+              <div className="mt-8 rounded-xl border border-hairline bg-panel">
+                <div className="border-b border-hairline px-5 py-3 text-sm font-medium">Recent activity</div>
+                {activity.map((e) => (
+                  <div key={e.id} className="flex items-center justify-between border-b border-hairline px-5 py-3 last:border-none text-sm">
+                    <div className="min-w-0">
+                      <div className="truncate">{e.agent} <span className="text-muted">→ {e.counterparty}</span></div>
+                      <div className="font-mono text-[11px] text-muted">{e.ts}</div>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <span className="font-mono text-sm">${e.amount}</span>
+                      <Pill kind={e.status} />
+                    </div>
+                  </div>
+                ))}
               </div>
             </>
           )}
@@ -474,27 +487,6 @@ export default function Dashboard() {
                   ))}
                 </div>
               )}
-            </>
-          )}
-
-          {tab === 'activity' && (
-            <>
-              <h1 className="text-2xl font-semibold tracking-tight">Activity</h1>
-              <p className="mt-1 text-sm text-muted">Every decision, on the record.</p>
-              <div className="mt-6 rounded-xl border border-hairline bg-panel">
-                {activity.map((e) => (
-                  <div key={e.id} className="flex items-center justify-between border-b border-hairline px-5 py-3 last:border-none text-sm">
-                    <div className="min-w-0">
-                      <div className="truncate">{e.agent} <span className="text-muted">→ {e.counterparty}</span></div>
-                      <div className="font-mono text-[11px] text-muted">{e.ts}</div>
-                    </div>
-                    <div className="flex items-center gap-4">
-                      <span className="font-mono text-sm">${e.amount}</span>
-                      <Pill kind={e.status} />
-                    </div>
-                  </div>
-                ))}
-              </div>
             </>
           )}
 
