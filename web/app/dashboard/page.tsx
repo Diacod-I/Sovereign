@@ -19,11 +19,7 @@ const INITIAL_AGENTS = [
   { id: 'ag_3', name: 'Ops Bill-Pay Agent', wallet: '0x71d004be55aa20c1e8f3', dailyBudget: 1000, perAction: 400, approvalThreshold: 500, allowlist: 4, spentToday: 0, status: 'paused' },
 ];
 
-const INITIAL_ALLOWLIST = [
-  { id: 'wl_1', listingId: 'ls_1', name: 'On-chain Data Agent', address: '0x3b12aa77c0e4d5a9c3f2b8e1d0447a2f9c6b1e30', cap: 5 },
-  { id: 'wl_2', listingId: 'ls_2', name: 'Address Risk Agent', address: '0x9e51c204be55aa20c1e8f3aa771d004be55aa20c', cap: 20 },
-  { id: 'wl_3', listingId: 'ls_3', name: 'Liquidity Intel Agent', address: '0x77a0e1730af4b902dd512c88e1730af4b902dd51', cap: 2 },
-];
+const INITIAL_ALLOWLIST: { id: string; listingId: string; name: string; address: string; cap: number }[] = [];
 
 const INITIAL_ACTIVITY = [
   { id: 'ev_1', ts: '1m ago', agent: 'Data Research Agent', counterparty: 'Chain Metrics Brain', amount: 0.05, status: 'allowed' },
@@ -34,23 +30,41 @@ const INITIAL_ACTIVITY = [
 
 type Listing = {
   id: string;
-  sellerId: string;
   name: string;
-  price: string;
-  unit: string;
-  jobs: number;
-  success: number;
-  stake: number;
-  parties: number;
   summary: string;
+  tags: string;
+  price: string;
   payTo: string;
-  cover?: string;
-  mcp: {
-    endpoint: string;
-    transport: string;
-    version: string;
-  };
+  owner: string;
+  endpoint: string;
 };
+
+const SUBGRAPH_URL =
+  process.env.NEXT_PUBLIC_SUBGRAPH_URL ||
+  'https://api.studio.thegraph.com/query/1758796/sovereign-registry/version/latest';
+
+// Live discovery — reads active agents straight from the Sovereign subgraph.
+async function fetchMarket(): Promise<Listing[]> {
+  const query =
+    '{ agents(where: { active: true }, orderBy: createdAt, orderDirection: desc, first: 100) { id name description tags endpoint pricePerCall payTo owner } }';
+  const res = await fetch(SUBGRAPH_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ query }),
+  });
+  const json = await res.json();
+  if (json.errors) throw new Error('subgraph error');
+  return (json.data?.agents ?? []).map((a: any) => ({
+    id: a.id,
+    name: a.name,
+    summary: a.description,
+    tags: a.tags,
+    price: (Number(a.pricePerCall) / 1e6).toString(),
+    payTo: a.payTo,
+    owner: a.owner,
+    endpoint: a.endpoint,
+  }));
+}
 
 // Agent listings only — each is an agent that exposes tools over MCP,
 // paid per-call in USDC via x402.
@@ -62,19 +76,6 @@ const DAILY_SPEND = [
   { day: 'Fri', usdc: 54 },
   { day: 'Sat', usdc: 30 },
   { day: 'Sun', usdc: 100 },
-];
-
-const SELLERS: Record<string, { id: string; name: string; worldId: string }> = {
-  sel_maya: { id: 'sel_maya', name: 'Maya Chen', worldId: '0x1f3a9c77e0b4d5a9c3f2b8e1d0447a2f9c6b1e302a77c0e4d5a9c3f2b8e1d044' },
-  sel_dev: { id: 'sel_dev', name: 'Devansh Rao', worldId: '0x9e51c204be55aa20c1e8f3aa771d004be55aa20c1e8f3aa771d004be55aa20c1' },
-  sel_lena: { id: 'sel_lena', name: 'Lena Fischer', worldId: '0x77a0e1730af4b902dd512c88e1730af4b902dd512c88e1730af4b902dd512c88' },
-};
-
-const LISTINGS: Listing[] = [
-  { id: 'ls_1', sellerId: 'sel_maya', name: 'On-chain Data Agent', price: '0.05', unit: 'call', jobs: 842, success: 99.2, stake: 500, parties: 61, summary: 'Live wallet, token, and protocol intelligence for any EVM address.', payTo: '0x3b12aa77c0e4d5a9c3f2b8e1d0447a2f9c6b1e30', mcp: { endpoint: 'https://mcp.chainmetrics.xyz/sse', transport: 'HTTP + x402', version: '2025-06-18' } },
-  { id: 'ls_2', sellerId: 'sel_dev', name: 'Address Risk Agent', price: '12', unit: 'job', jobs: 311, success: 97.5, stake: 1000, parties: 44, summary: 'Sanctions, mixer, and exploit exposure scoring before you transact.', payTo: '0x9e51c204be55aa20c1e8f3aa771d004be55aa20c', mcp: { endpoint: 'https://api.sentinel.sh/mcp', transport: 'HTTP + x402', version: '2025-06-18' } },
-  { id: 'ls_3', sellerId: 'sel_maya', name: 'Liquidity Intel Agent', price: '0.02', unit: 'call', jobs: 1290, success: 99.8, stake: 750, parties: 88, summary: 'Real-time DEX depth, slippage, and LP position snapshots.', payTo: '0x77a0e1730af4b902dd512c88e1730af4b902dd51', mcp: { endpoint: 'https://mcp.arrakis.fi/v1', transport: 'HTTP + x402', version: '2025-06-18' } },
-  { id: 'ls_4', sellerId: 'sel_lena', name: 'Compliance Playbook Agent', price: '0.10', unit: 'call', jobs: 12, success: 100, stake: 100, parties: 3, summary: 'SOC 2 / ISO control lookups and audit-evidence drafting.', payTo: '0x0c44be55aa20c1e8f371d004be55aa20c1e8f371', mcp: { endpoint: 'https://freshvault.dev/mcp', transport: 'HTTP + x402', version: '2025-06-18' } },
 ];
 
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
@@ -114,35 +115,28 @@ function ArrowUpRight({ size = 12 }: { size?: number }) {
   );
 }
 
-// Amber warning + hover tooltip for low-reputation listings.
-function DiversityWarning() {
-  return (
-    <span className="group relative inline-flex" tabIndex={0}>
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-label="Warning">
-        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
-        <line x1="12" y1="9" x2="12" y2="13" />
-        <line x1="12" y1="17" x2="12.01" y2="17" />
-      </svg>
-      <span className="pointer-events-none absolute bottom-full right-0 z-20 mb-2 hidden w-56 rounded-lg border border-hairline bg-panel px-3 py-2 text-left text-[11px] leading-snug text-muted shadow-xl group-hover:block">
-        Low counterparty diversity! Worker reputation not yet established.
-      </span>
-    </span>
-  );
-}
-
-// The MCP detail body — shown in the click modal.
+// The MCP detail body — shown in the click modal. Every field here is on-chain.
 function McpDetails({ l }: { l: Listing }) {
+  const tags = l.tags ? l.tags.split(',').map((t) => t.trim()).filter(Boolean) : [];
   return (
     <>
       <div className="flex items-center gap-3">
-        <Avatar name={SELLERS[l.sellerId].name} size={40} />
+        <Avatar name={l.name} size={40} />
         <div>
           <div className="font-medium">{l.name}</div>
-          <div className="text-xs text-muted">by {SELLERS[l.sellerId].name}</div>
+          <div className="text-xs text-muted">by <span className="font-mono">{short(l.owner)}</span></div>
         </div>
       </div>
 
       <p className="mt-3 px-1 text-sm justify-center text-muted">{l.summary}</p>
+
+      {tags.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {tags.map((t) => (
+            <span key={t} className="rounded-full border border-hairline bg-background px-2 py-0.5 font-mono text-[10px] text-muted">{t}</span>
+          ))}
+        </div>
+      )}
 
        <div className="mt-3 flex items-center justify-between rounded-lg border border-hairline bg-background px-3 py-2">
         <span className="text-[10px] font-bold uppercase text-muted">Worker Wallet </span>
@@ -152,10 +146,9 @@ function McpDetails({ l }: { l: Listing }) {
       <div className="mt-3 rounded-lg border border-hairline bg-background p-3">
         <div className="flex items-center justify-between">
           <span className="text-[10px] uppercase tracking-wider text-muted">MCP endpoint</span>
-          <span className="font-mono text-[10px] text-accent">{l.mcp.transport}</span>
+          <span className="font-mono text-[10px] text-accent">HTTP + x402</span>
         </div>
-        <div className="mt-1 break-all font-mono text-xs">{l.mcp.endpoint}</div>
-        <div className="mt-1 font-mono text-[10px] text-muted">protocol {l.mcp.version}</div>
+        <div className="mt-1 break-all font-mono text-xs">{l.endpoint}</div>
       </div>
 
     </>
@@ -173,12 +166,15 @@ export default function Dashboard() {
   const [agents, setAgents] = useState(INITIAL_AGENTS);
   const [allowlist, setAllowlist] = useState(INITIAL_ALLOWLIST);
   const [activity, setActivity] = useState(INITIAL_ACTIVITY);
-  const [added, setAdded] = useState<Record<string, boolean>>({});
+
+  // live marketplace (subgraph)
+  const [market, setMarket] = useState<Listing[]>([]);
+  const [marketLoading, setMarketLoading] = useState(true);
+  const [marketError, setMarketError] = useState<string | null>(null);
 
   // marketplace detail modal
   const [openId, setOpenId] = useState<string | null>(null);
   const [sellerId, setSellerId] = useState<string | null>(null);
-  const [confirmId, setConfirmId] = useState<string | null>(null);
   const [q, setQ] = useState('');
 
   // create-agent form
@@ -197,6 +193,16 @@ export default function Dashboard() {
       if (s) setOrg(s);
     } catch {}
     setOrgReady(true);
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    setMarketLoading(true);
+    setMarketError(null);
+    fetchMarket()
+      .then((rows) => { if (alive) { setMarket(rows); setMarketLoading(false); } })
+      .catch(() => { if (alive) { setMarketError('Could not reach the subgraph.'); setMarketLoading(false); } });
+    return () => { alive = false; };
   }, []);
 
   const spentToday = useMemo(() => agents.reduce((s, a) => s + a.spentToday, 0), [agents]);
@@ -223,12 +229,14 @@ export default function Dashboard() {
     setNName(''); setNBudget('250'); setNThreshold('100'); setShowNew(false); setTab('agents');
   };
 
-  const openListing = LISTINGS.find((l) => l.id === openId) || null;
-  const confirmListing = LISTINGS.find((l) => l.id === confirmId) || null;
-  const filtered = LISTINGS.filter((l) => (l.name + ' ' + l.summary + ' ' + SELLERS[l.sellerId].name).toLowerCase().includes(q.trim().toLowerCase()));
+  const openListing = market.find((l) => l.id === openId) || null;
+  const filtered = market.filter((l) => (l.name + ' ' + l.summary + ' ' + l.tags + ' ' + l.owner).toLowerCase().includes(q.trim().toLowerCase()));
   const toggleAgent = (id: string) => setAgents((list) => list.map((a) => (a.id === id ? { ...a, status: a.status === 'active' ? 'paused' : 'active' } : a)));
-  const requestAdd = (l: Listing) => { if (l.parties < 10) setConfirmId(l.id); else setAdded((m) => ({ ...m, [l.id]: true })); };
-  const doAdd = (id: string) => { setAdded((m) => ({ ...m, [id]: true })); setConfirmId(null); };
+  const isAllowlisted = (id: string) => allowlist.some((w) => w.listingId === id);
+  const addToAllowlist = (l: Listing) => {
+    if (isAllowlisted(l.id)) return;
+    setAllowlist((list) => [...list, { id: 'wl_' + l.id, listingId: l.id, name: l.name, address: l.payTo, cap: 5 }]);
+  };
 
   const NAV: { id: Tab; label: string }[] = [
     { id: 'overview', label: 'Overview' },
@@ -370,25 +378,25 @@ export default function Dashboard() {
                 <>
                   <button onClick={() => setSellerId(null)} className="text-sm text-muted transition-colors hover:text-foreground">← Back to marketplace</button>
                   <div className="mt-4 flex items-center gap-4">
-                    <Avatar name={SELLERS[sellerId].name} size={56} />
+                    <Avatar name={sellerId} size={56} />
                     <div>
-                      <h1 className="text-2xl font-semibold tracking-tight">{SELLERS[sellerId].name}</h1>
+                      <h1 className="font-mono text-xl font-semibold tracking-tight">{short(sellerId)}</h1>
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
-                        <span className="inline-flex items-center gap-1 text-accent"><span className="inline-block h-1.5 w-1.5 rounded-full bg-accent" />World ID verified</span>
-                        <Copyable value={SELLERS[sellerId].worldId} className="font-mono text-muted hover:text-foreground">{short(SELLERS[sellerId].worldId)}</Copyable>
+                        <span className="inline-flex items-center gap-1 text-muted"><span className="inline-block h-1.5 w-1.5 rounded-full bg-muted" />World ID check pending</span>
+                        <Copyable value={sellerId} className="font-mono text-muted hover:text-foreground">{short(sellerId)}</Copyable>
                       </div>
                     </div>
                   </div>
-                  <p className="mt-6 text-sm text-muted">Agents released by {SELLERS[sellerId].name}</p>
+                  <p className="mt-6 text-sm text-muted">Agents published by this wallet</p>
                   <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                    {LISTINGS.filter((l) => l.sellerId === sellerId).map((l) => (
+                    {market.filter((l) => l.owner === sellerId).map((l) => (
                       <div key={l.id} className="overflow-hidden rounded-xl border border-hairline bg-panel">
-                        <Cover name={l.name} image={l.cover} />
+                        <Cover name={l.name} />
                         <div className="p-5">
                           <div className="font-medium">{l.name}</div>
                           <div className="mt-1 truncate text-xs text-muted">{l.summary}</div>
                           <div className="mt-4 flex items-center justify-between">
-                            <span className="font-mono text-sm">from ${l.price}<span className="text-muted">/{l.unit}</span></span>
+                            <span className="font-mono text-sm">{l.price}<span className="text-muted"> USDC/call</span></span>
                             <button onClick={() => setOpenId(l.id)} className="inline-flex items-center gap-1 text-sm text-muted transition-colors hover:text-foreground">Details<ArrowUpRight /></button>
                           </div>
                         </div>
@@ -399,22 +407,25 @@ export default function Dashboard() {
               ) : (
                 <>
               <h1 className="text-2xl font-semibold tracking-tight">Marketplace</h1>
-              <p className="mt-1 text-sm text-muted">Workers your agents can hire.</p>
+              <p className="mt-1 text-sm text-muted">Workers your agents can hire — live from the on-chain registry.</p>
               <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search agents…" className="mt-6 w-full rounded-lg border border-hairline bg-background px-3 py-2.5 text-sm outline-none focus:border-accent" />
-              {filtered.length === 0 && <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-muted">No agents match “{q}”.</div>}
+              {marketLoading && <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-muted">Loading agents from the subgraph…</div>}
+              {!marketLoading && marketError && <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-red-400">{marketError}</div>}
+              {!marketLoading && !marketError && market.length === 0 && <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-muted">No agents registered on-chain yet.</div>}
+              {!marketLoading && !marketError && market.length > 0 && filtered.length === 0 && <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-muted">No agents match “{q}”.</div>}
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 {filtered.map((l) => (
                   <div key={l.id} className="overflow-hidden rounded-xl border border-hairline bg-panel">
-                    <Cover name={l.name} image={l.cover} />
+                    <Cover name={l.name} />
                     <div className="p-5">
                     <div className="flex items-start justify-between">
                       <div className="flex items-center gap-3">
-                        <button onClick={() => setSellerId(l.sellerId)} aria-label="View seller profile" className="shrink-0">
-                          <Avatar name={SELLERS[l.sellerId].name} />
+                        <button onClick={() => setSellerId(l.owner)} aria-label="View seller profile" className="shrink-0">
+                          <Avatar name={l.owner} />
                         </button>
                         <div>
                           <div className="font-medium">{l.name}</div>
-                          <div className="text-xs text-muted">by <button onClick={() => setSellerId(l.sellerId)} className="underline underline-offset-2 hover:text-foreground">{SELLERS[l.sellerId].name}</button></div>
+                          <div className="text-xs text-muted">by <button onClick={() => setSellerId(l.owner)} className="font-mono underline underline-offset-2 hover:text-foreground">{short(l.owner)}</button></div>
                         </div>
                       </div>
                       <button
@@ -425,23 +436,22 @@ export default function Dashboard() {
                         <ArrowUpRight />
                       </button>
                     </div>
-                    <div className="mt-4 grid grid-cols-3 gap-2 text-center">
-                      <div><div className="font-mono text-sm">{l.success}%</div><div className="text-[10px] uppercase tracking-wider text-muted">success</div></div>
-                      <div><div className="font-mono text-sm">{l.parties}</div><div className="text-[10px] uppercase tracking-wider text-muted">parties</div></div>
-                      <div><div className="font-mono text-sm">${l.stake}</div><div className="text-[10px] uppercase tracking-wider text-muted">staked</div></div>
-                    </div>
-                    <div className="mt-4 flex items-center justify-between">
-                      <span className="font-mono text-sm">from ${l.price}<span className="text-muted">/{l.unit}</span></span>
-                      <div className="flex items-center gap-2">
-                        {l.parties < 10 && <DiversityWarning />}
-                        <button
-                          onClick={() => requestAdd(l)}
-                          disabled={!!added[l.id]}
-                          className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${added[l.id] ? 'cursor-default border border-accent text-accent opacity-70' : 'bg-accent text-black hover:opacity-90'}`}
-                        >
-                          {added[l.id] ? 'On allowlist ✓' : 'Add to allowlist'}
-                        </button>
+                    {l.tags && (
+                      <div className="mt-4 flex flex-wrap gap-1.5">
+                        {l.tags.split(',').map((t) => t.trim()).filter(Boolean).slice(0, 4).map((t) => (
+                          <span key={t} className="rounded-full border border-hairline bg-background px-2 py-0.5 font-mono text-[10px] text-muted">{t}</span>
+                        ))}
                       </div>
+                    )}
+                    <div className="mt-4 flex items-center justify-between">
+                      <span className="font-mono text-sm">{l.price}<span className="text-muted"> USDC/call</span></span>
+                      <button
+                        onClick={() => addToAllowlist(l)}
+                        disabled={isAllowlisted(l.id)}
+                        className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${isAllowlisted(l.id) ? 'cursor-default border border-accent text-accent opacity-70' : 'bg-accent text-black hover:opacity-90'}`}
+                      >
+                        {isAllowlisted(l.id) ? 'On allowlist ✓' : 'Add to allowlist'}
+                      </button>
                     </div>
                     </div>
                   </div>
@@ -503,31 +513,13 @@ export default function Dashboard() {
             </button>
             <McpDetails l={openListing} />
             <div className="mt-5 flex items-center gap-2">
-              {openListing.parties < 10 && <DiversityWarning />}
               <button
-                onClick={() => requestAdd(openListing)}
-                disabled={!!added[openListing.id]}
-                className={`flex-1 rounded-lg px-4 py-2.5 text-sm font-medium transition-colors ${added[openListing.id] ? 'cursor-default border border-accent text-accent opacity-70' : 'bg-accent text-black hover:opacity-90'}`}
+                onClick={() => addToAllowlist(openListing)}
+                disabled={isAllowlisted(openListing.id)}
+                className={`flex-1 rounded-lg px-4 py-2.5 text-sm font-medium transition-colors ${isAllowlisted(openListing.id) ? 'cursor-default border border-accent text-accent opacity-70' : 'bg-accent text-black hover:opacity-90'}`}
               >
-                {added[openListing.id] ? 'On allowlist ✓' : 'Add to allowlist'}
+                {isAllowlisted(openListing.id) ? 'On allowlist ✓' : 'Add to allowlist'}
               </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Low-reputation confirm */}
-      {confirmListing && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 px-6" onClick={() => setConfirmId(null)}>
-          <div className="w-full max-w-sm rounded-2xl border border-hairline bg-panel p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center gap-2" style={{ color: '#f59e0b' }}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></svg>
-              <span className="text-sm font-semibold">Low reputation</span>
-            </div>
-            <p className="mt-3 text-sm text-muted"><span className="text-foreground">{confirmListing.name}</span> has low counterparty diversity — its reputation isn&apos;t established yet. Add it to your allowlist anyway?</p>
-            <div className="mt-5 flex gap-3">
-              <button onClick={() => doAdd(confirmListing.id)} className="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black">Add anyway</button>
-              <button onClick={() => setConfirmId(null)} className="rounded-lg border border-hairline px-4 py-2.5 text-sm text-muted hover:text-foreground">Cancel</button>
             </div>
           </div>
         </div>
