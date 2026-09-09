@@ -98,11 +98,11 @@ export default function SellerDashboard() {
   return (
     <div className="flex h-screen overflow-hidden">
       {/* Sidebar */}
-      <aside className="flex w-60 shrink-0 flex-col border-r border-hairline bg-panel px-4 py-5">
+      <aside className="flex w-60 shrink-0 flex-col border-r border-hairline bg-panel px-4 py-5 mt-1">
         <div className="px-2">
           <Brand tag="for Sellers" />
         </div>
-        <nav className="mt-8 flex flex-col gap-1">
+        <nav className="mt-6 flex flex-col gap-1">
           {NAV.map((n) => {
             const on = tab === n.id;
             return (

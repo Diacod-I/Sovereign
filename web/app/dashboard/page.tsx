@@ -124,7 +124,7 @@ function DiversityWarning() {
         <line x1="12" y1="17" x2="12.01" y2="17" />
       </svg>
       <span className="pointer-events-none absolute bottom-full right-0 z-20 mb-2 hidden w-56 rounded-lg border border-hairline bg-panel px-3 py-2 text-left text-[11px] leading-snug text-muted shadow-xl group-hover:block">
-        Low counterparty diversity! Agent reputation not yet established.
+        Low counterparty diversity! Worker reputation not yet established.
       </span>
     </span>
   );
@@ -141,20 +141,21 @@ function McpDetails({ l }: { l: Listing }) {
           <div className="text-xs text-muted">by {SELLERS[l.sellerId].name}</div>
         </div>
       </div>
-      <p className="mt-3 text-sm text-muted">{l.summary}</p>
 
-      <div className="mt-4 rounded-lg border border-hairline bg-background p-3">
+      <p className="mt-3 px-1 text-sm justify-center text-muted">{l.summary}</p>
+
+       <div className="mt-3 flex items-center justify-between rounded-lg border border-hairline bg-background px-3 py-2">
+        <span className="text-[10px] font-bold uppercase text-muted">Worker Wallet </span>
+        <Copyable value={l.payTo} className="font-mono text-xs text-muted hover:text-foreground">&nbsp;{short(l.payTo)}</Copyable>
+      </div>
+
+      <div className="mt-3 rounded-lg border border-hairline bg-background p-3">
         <div className="flex items-center justify-between">
           <span className="text-[10px] uppercase tracking-wider text-muted">MCP endpoint</span>
           <span className="font-mono text-[10px] text-accent">{l.mcp.transport}</span>
         </div>
         <div className="mt-1 break-all font-mono text-xs">{l.mcp.endpoint}</div>
         <div className="mt-1 font-mono text-[10px] text-muted">protocol {l.mcp.version}</div>
-      </div>
-
-      <div className="mt-3 flex items-center justify-between rounded-lg border border-hairline bg-background px-3 py-2">
-        <span className="text-[10px] uppercase tracking-wider text-muted">Pays to</span>
-        <Copyable value={l.payTo} className="font-mono text-xs text-muted hover:text-foreground">{short(l.payTo)}</Copyable>
       </div>
 
     </>
@@ -239,14 +240,13 @@ export default function Dashboard() {
   return (
     <div className="flex h-screen overflow-hidden">
       {/* Sidebar */}
-      <aside className="flex w-60 shrink-0 flex-col border-r border-hairline bg-panel px-4 py-5">
+      <aside className="flex w-60 shrink-0 flex-col border-r border-hairline bg-panel px-4 py-5 mt-1">
         <div className="px-2">
           <Brand />
         </div>
-        <nav className="mt-8 flex flex-col gap-1">
+        <nav className="mt-6 flex flex-col gap-1">
           {NAV.map((n) => {
             const on = tab === n.id;
-            const badge = n.id === 'allowlist' && allowlist.length ? allowlist.length : null;
             return (
               <button
                 key={n.id}
@@ -254,7 +254,6 @@ export default function Dashboard() {
                 className={`flex items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors ${on ? 'bg-[#1c1c1c] text-foreground' : 'text-muted hover:text-foreground'}`}
               >
                 <span>{n.label}</span>
-                {badge && <span className="rounded-full bg-accent px-1.5 text-[11px] font-semibold text-black">{badge}</span>}
               </button>
             );
           })}
@@ -400,7 +399,7 @@ export default function Dashboard() {
               ) : (
                 <>
               <h1 className="text-2xl font-semibold tracking-tight">Marketplace</h1>
-              <p className="mt-1 text-sm text-muted">Agents your agents can hire — ranked by on-chain reputation.</p>
+              <p className="mt-1 text-sm text-muted">Workers your agents can hire.</p>
               <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search agents…" className="mt-6 w-full rounded-lg border border-hairline bg-background px-3 py-2.5 text-sm outline-none focus:border-accent" />
               {filtered.length === 0 && <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-muted">No agents match “{q}”.</div>}
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
@@ -456,7 +455,7 @@ export default function Dashboard() {
           {tab === 'allowlist' && (
             <>
               <h1 className="text-2xl font-semibold tracking-tight">Allowlist</h1>
-              <p className="mt-1 text-sm text-muted">Trusted workers your agents can pay without asking — set how much each may be paid per call.</p>
+              <p className="mt-1 text-sm text-muted">Trusted workers your agents can pay without asking.</p>
               {allowlist.length === 0 ? (
                 <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-muted">No workers allowlisted yet. Add them from the Marketplace.</div>
               ) : (
@@ -468,7 +467,7 @@ export default function Dashboard() {
                           <Avatar name={w.name} />
                           <div className="min-w-0">
                             <div className="truncate font-medium">{w.name}</div>
-                            <Copyable value={w.address} className="mt-1 font-mono text-[11px] text-muted hover:text-foreground">{short(w.address)}</Copyable>
+                            <button onClick={() => setOpenId(w.listingId)} className="inline-flex items-center gap-1 text-sm text-muted transition-colors hover:text-foreground">Details<ArrowUpRight /></button>
                           </div>
                         </div>
                         <div className="flex items-center gap-3">
@@ -479,7 +478,6 @@ export default function Dashboard() {
                               <input value={String(w.cap)} onChange={(e) => setCap(w.id, e.target.value)} inputMode="decimal" className="w-16 bg-transparent px-1.5 py-1.5 text-sm outline-none" />
                             </span>
                           </label>
-                          <button onClick={() => setOpenId(w.listingId)} className="inline-flex items-center gap-1 text-sm text-muted transition-colors hover:text-foreground">Details<ArrowUpRight /></button>
                           <button onClick={() => removeWl(w.id)} className="text-sm text-muted transition-colors hover:text-red-400">Remove</button>
                         </div>
                       </div>

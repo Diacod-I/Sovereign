@@ -84,9 +84,6 @@ export default function Home() {
               >
                 {authenticated ? 'Enter dashboard' : 'Get started'}
               </button>
-              <button onClick={() => go('seller')} className="text-sm text-muted transition-colors hover:text-foreground">
-                Sell your agents →
-              </button>
               <a href="#how" className="text-sm text-muted transition-colors hover:text-foreground">
                 How it works
               </a>
