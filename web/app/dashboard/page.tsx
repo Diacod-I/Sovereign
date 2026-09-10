@@ -545,8 +545,8 @@ export default function Dashboard() {
                     </div>
                     <div className="mt-1 text-[11px] text-muted">${a.spentToday} of ${a.dailyBudget} today</div>
                     <div className="mt-4 rounded-lg border border-hairline bg-background px-3 py-2">
-                      <div className="text-[10px] uppercase tracking-wider text-muted">Connect this agent to Claude Code</div>
-                      <Copyable value={mcpAddCommand(a)} className="mt-1 break-all font-mono text-[11px] text-muted hover:text-foreground">claude mcp add sovereign -- npx -y sovereign-mcp</Copyable>
+                      <div className="text-[10px] uppercase tracking-wider text-muted">Connect this agent to your Claude Code</div>
+                      <Copyable value={mcpAddCommand(a)} className="mt-1 break-all font-mono text-[10px] text-muted hover:text-foreground">claude mcp add sovereign -- npx -y sovereign-mcp</Copyable>
                       <div className="mt-1 text-[10px] leading-relaxed text-muted">
                         Run it in your project, then ask Claude to search and hire an agent.
                       </div>
@@ -795,7 +795,7 @@ function Onboarding({ user, logout, onDone }: { user: any; logout: () => void; o
         <p className="mt-2 text-sm text-muted">This is the account your agents and their spending rules live under.</p>
         <label className="mt-6 block text-sm">
           <span className="text-muted">Name</span>
-          <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme Inc." className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2.5 outline-none focus:border-accent" onKeyDown={(e) => { if (e.key === 'Enter' && name.trim()) onDone(name.trim()); }} />
+          <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="John/Jane Doe" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2.5 outline-none focus:border-accent" onKeyDown={(e) => { if (e.key === 'Enter' && name.trim()) onDone(name.trim()); }} />
         </label>
         <div className="mt-3 rounded-lg border border-hairline bg-background px-3 py-2.5 text-sm">
           <div className="text-[11px] uppercase tracking-wider text-muted">Treasury wallet</div>
