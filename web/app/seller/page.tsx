@@ -11,6 +11,8 @@ import { useWalletData, useWithdraw, BalanceCard, ActivityFeed, DepositModal, Wi
 import { buildBalanceSeries, fetchAgentsByOwner, fetchReceived, formatUsdc, txUrl, type RangeKey, type RegistryAgent } from '../lib/arc';
 import { useRegistry, type ListingInput } from '../lib/registry';
 import WorldVerify from '../components/WorldVerify';
+import EndpointProbe from '../components/EndpointProbe';
+import type { ProbeResult } from '../lib/probe';
 import { useEmbeddedWallet } from '../lib/useEmbeddedWallet';
 import { readVerification, shortNullifier, levelLabel, type SellerVerification } from '../lib/world';
 
@@ -64,6 +66,10 @@ export default function SellerDashboard() {
 
   const [showNew, setShowNew] = useState(false);
   const [f, setF] = useState({ name: '', desc: '', tags: '', price: '', endpoint: '', payTo: '', cover: '' });
+  // Result of the pre-listing endpoint check. Registering is gated on this so a
+  // dead or mispriced endpoint cannot reach the marketplace by accident.
+  const [probe, setProbe] = useState<ProbeResult | null>(null);
+  const [forceList, setForceList] = useState(false);
 
   // profile
   const [pName, setPName] = useState('');
@@ -160,13 +166,26 @@ export default function SellerDashboard() {
     description: f.desc.trim(),
     tags: f.tags.trim(),
     price: f.price.trim(),
-    endpoint: f.endpoint.trim() || '—',
+    endpoint: f.endpoint.trim(),
     payTo: f.payTo.trim() || walletAddress || '',
   });
 
   const createAgent = async () => {
     const input = fToInput();
     if (!input.name || !input.price || txPending) return;
+    if (!input.endpoint) {
+      setTxError('An endpoint URL is required — buyers have nothing to call without one.');
+      return;
+    }
+    // Listing an unverified endpoint is possible, but only deliberately.
+    if (!probe && !forceList) {
+      setTxError('Run the endpoint check first.');
+      return;
+    }
+    if (probe && !probe.ok && !forceList) {
+      setTxError('The endpoint check failed. Fix it, or tick “list anyway” to publish it as-is.');
+      return;
+    }
     setTxError(null); setTxNote(null); setTxPending('Registering agent on-chain…');
     try {
       const { hash, id } = await registry.register(input);
@@ -176,6 +195,8 @@ export default function SellerDashboard() {
       ]);
       setTxNote({ msg: `Listed “${input.name}” on-chain`, hash });
       setF({ name: '', desc: '', tags: '', price: '', endpoint: '', payTo: '', cover: '' });
+      setProbe(null);
+      setForceList(false);
       setShowNew(false);
       setTab('agents');
       reloadAgentsSoon();
@@ -457,14 +478,42 @@ export default function SellerDashboard() {
                   <input value={f.payTo} onChange={(e) => setF({ ...f, payTo: e.target.value })} placeholder="defaults to wallet" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" /></label>
               </div>
               <label className="text-sm"><span className="text-muted">Endpoint URL (x402-gated)</span>
-                <input value={f.endpoint} onChange={(e) => setF({ ...f, endpoint: e.target.value })} placeholder="https://…" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" /></label>
+                <input value={f.endpoint} onChange={(e) => { setF({ ...f, endpoint: e.target.value }); setProbe(null); setForceList(false); }} placeholder="https://…" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" /></label>
+
+              <EndpointProbe
+                endpoint={f.endpoint}
+                payTo={f.payTo.trim() || walletAddress || undefined}
+                price={f.price.trim() || undefined}
+                owner={walletAddress || undefined}
+                result={probe}
+                onResult={setProbe}
+              />
+
+              {probe && !probe.ok && (
+                <label className="flex cursor-pointer items-start gap-2 text-[11px] leading-relaxed text-muted">
+                  <input
+                    type="checkbox"
+                    checked={forceList}
+                    onChange={(e) => setForceList(e.target.checked)}
+                    className="mt-0.5 accent-[color:var(--accent)]"
+                  />
+                  <span>List anyway — I understand buyers will see a listing they cannot pay.</span>
+                </label>
+              )}
             </div>
             {txError && <div className="mt-4 rounded-lg border border-red-400/30 bg-red-400/5 px-3 py-2 text-[11px] text-red-400">{txError}</div>}
             <div className="mt-5 flex gap-3">
-              <button disabled={!f.name.trim() || !f.price.trim() || !!txPending} onClick={createAgent} className="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40">
-                {txPending ? 'Confirm in wallet…' : 'List agent'}
+              <button
+                disabled={
+                  !f.name.trim() || !f.price.trim() || !f.endpoint.trim() || !!txPending ||
+                  (!probe && !forceList) || (!!probe && !probe.ok && !forceList)
+                }
+                onClick={createAgent}
+                className="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40"
+              >
+                {txPending ? 'Confirm in wallet…' : probe?.ok ? 'List verified agent' : 'List agent'}
               </button>
-              <button onClick={() => setShowNew(false)} className="rounded-lg border border-hairline px-4 py-2.5 text-sm text-muted hover:text-foreground">Cancel</button>
+              <button onClick={() => { setShowNew(false); setProbe(null); setForceList(false); }} className="rounded-lg border border-hairline px-4 py-2.5 text-sm text-muted hover:text-foreground">Cancel</button>
             </div>
           </div>
         </div>
@@ -493,16 +542,27 @@ function EditWorkerModal({ agent, onSave, onClose }: { agent: Agent; onSave: (in
   const [tags, setTags] = useState(agent.tags);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [probe, setProbe] = useState<ProbeResult | null>(null);
 
   const save = async () => {
     if (!name.trim() || !price.trim() || busy) return;
+    if (!endpoint.trim()) {
+      setErr('An endpoint URL is required.');
+      return;
+    }
+    // Editing price or endpoint is exactly when a listing drifts out of sync with
+    // what the endpoint actually quotes, so warn rather than silently publish.
+    if (probe && !probe.ok) {
+      setErr('The endpoint check failed — buyers would not be able to pay this listing.');
+      return;
+    }
     setErr(null);
     setBusy(true);
     try {
       await onSave({
         name: name.trim(),
         price: price.trim(),
-        endpoint: endpoint.trim() || '—',
+        endpoint: endpoint.trim(),
         payTo: payTo.trim() || agent.payTo,
         description: description.trim(),
         tags: tags.trim(),
@@ -537,7 +597,16 @@ function EditWorkerModal({ agent, onSave, onClose }: { agent: Agent; onSave: (in
               <input value={payTo} onChange={(e) => setPayTo(e.target.value)} placeholder="0x…" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 font-mono text-xs outline-none focus:border-accent" /></label>
           </div>
           <label className="text-sm"><span className="text-muted">Endpoint URL (x402-gated)</span>
-            <input value={endpoint} onChange={(e) => setEndpoint(e.target.value)} placeholder="https://…" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" /></label>
+            <input value={endpoint} onChange={(e) => { setEndpoint(e.target.value); setProbe(null); }} placeholder="https://…" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" /></label>
+
+          <EndpointProbe
+            endpoint={endpoint}
+            payTo={payTo.trim() || agent.payTo}
+            price={price.trim() || undefined}
+            owner={agent.owner || undefined}
+            result={probe}
+            onResult={setProbe}
+          />
         </div>
         {err && <div className="mt-4 rounded-lg border border-red-400/30 bg-red-400/5 px-3 py-2 text-[11px] text-red-400">{err}</div>}
         <div className="mt-5 flex gap-3">

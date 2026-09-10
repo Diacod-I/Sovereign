@@ -50,7 +50,32 @@ export type BuyerAgent = {
 
 const INITIAL_AGENTS: BuyerAgent[] = [];
 
-type AllowEntry = { id: string; listingId: string; name: string; address: string; cap: number };
+type AllowEntry = {
+  id: string;
+  listingId: string;
+  name: string;
+  address: string;
+  cap: number;
+  /**
+   * Which buyer agents may hire this worker. `null` means every agent, including
+   * ones created later — that is the "all agents" choice, not a missing value.
+   * Entries saved before scoping existed have no field at all, and are read as
+   * `null` so nobody's existing allowlist silently stops working.
+   */
+  agentIds?: string[] | null;
+};
+
+/** True when this entry authorises the given agent. */
+function entryAllowsAgent(entry: AllowEntry, agentId: string): boolean {
+  const scope = entry.agentIds;
+  if (scope === undefined || scope === null) return true; // all agents
+  return scope.includes(agentId);
+}
+
+/** Entries a given agent may spend against. */
+function allowlistForAgent(allowlist: AllowEntry[], agentId: string): AllowEntry[] {
+  return allowlist.filter((w) => entryAllowsAgent(w, agentId));
+}
 
 const INITIAL_ALLOWLIST: AllowEntry[] = [];
 
@@ -108,8 +133,14 @@ type PolicyVerdict =
 
 function checkPolicy(agent: BuyerAgent, priceUsdc: number, payTo: string, allowlist: AllowEntry[]): PolicyVerdict {
   if (agent.status !== 'active') return { ok: false, reason: `${agent.name} is paused — resume it to spend.` };
-  const entry = allowlist.find((w) => w.address.toLowerCase() === payTo.toLowerCase());
-  if (!entry) return { ok: false, reason: 'This worker is not on your allowlist. Add it first.' };
+  const matches = allowlist.filter((w) => w.address.toLowerCase() === payTo.toLowerCase());
+  if (!matches.length) return { ok: false, reason: 'This worker is not on your allowlist. Add it first.' };
+  // Allowlisted for someone, but not necessarily for this agent — say which,
+  // because "not allowlisted" would be misleading and hard to act on.
+  const entry = matches.find((w) => entryAllowsAgent(w, agent.id));
+  if (!entry) {
+    return { ok: false, reason: `${matches[0].name} is allowlisted, but not for ${agent.name}. Add ${agent.name} to its allowlist scope.` };
+  }
   if (entry.cap && priceUsdc > entry.cap) return { ok: false, reason: `Over this worker's per-call cap ($${entry.cap}).` };
   if (priceUsdc > agent.perAction) return { ok: false, reason: `Over ${agent.name}'s per-action limit ($${agent.perAction}).` };
   if (agent.spentToday + priceUsdc > agent.dailyBudget)
@@ -250,6 +281,8 @@ export default function Dashboard() {
 
   // marketplace "Hire & pay" + spend-policy enforcement
   const [hireId, setHireId] = useState<string | null>(null);
+  // Listing awaiting an allowlist-scope choice (which agents may hire it).
+  const [allowFor, setAllowFor] = useState<Listing | null>(null);
   const [editAgentId, setEditAgentId] = useState<string | null>(null);
 
   // ---- live wallet (Privy embedded wallet, on Arc) ----
@@ -387,10 +420,31 @@ export default function Dashboard() {
   const filtered = market.filter((l) => (l.name + ' ' + l.summary + ' ' + l.tags + ' ' + l.owner).toLowerCase().includes(q.trim().toLowerCase()));
   const toggleAgent = (id: string) => setAgents((list) => list.map((a) => (a.id === id ? { ...a, status: a.status === 'active' ? 'paused' : 'active' } : a)));
   const isAllowlisted = (id: string) => allowlist.some((w) => w.listingId === id);
+
+  /** Opens the scope picker rather than allowlisting for everything by default. */
   const addToAllowlist = (l: Listing) => {
     if (isAllowlisted(l.id)) return;
-    setAllowlist((list) => [...list, { id: 'wl_' + l.id, listingId: l.id, name: l.name, address: l.payTo, cap: 5 }]);
+    if (agents.length === 0) {
+      // Nothing to scope to yet — send them to create an agent first.
+      setTab('agents');
+      setShowNew(true);
+      return;
+    }
+    setAllowFor(l);
   };
+
+  /** Commits the picker's choice. `agentIds === null` means every agent. */
+  const commitAllowlist = (l: Listing, agentIds: string[] | null, cap: number) => {
+    setAllowlist((list) => [
+      ...list.filter((w) => w.listingId !== l.id),
+      { id: 'wl_' + l.id, listingId: l.id, name: l.name, address: l.payTo, cap, agentIds },
+    ]);
+    setAllowFor(null);
+  };
+
+  /** Re-scoping an entry that already exists, from the Allowlist tab. */
+  const setEntryScope = (entryId: string, agentIds: string[] | null) =>
+    setAllowlist((list) => list.map((w) => (w.id === entryId ? { ...w, agentIds } : w)));
 
   const reloadWallet = () => setWalletNonce((n) => n + 1);
   // Native USDC transfer signed by the embedded wallet on Arc. Arc's native value
@@ -538,11 +592,47 @@ export default function Dashboard() {
                       <div className="text-muted">Daily budget</div><div className="text-right font-mono">${a.dailyBudget}</div>
                       <div className="text-muted">Per action budget</div><div className="text-right font-mono">${a.perAction}</div>
                       <div className="text-muted">Threshold for no approval</div><div className="text-right font-mono">${a.approvalThreshold}</div>
+                      <div className="text-muted">Allowlisted workers</div><div className="text-right font-mono">{allowlist.length}</div>
                     </div>
                     <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-[#1c1c1c]">
                       <div className="h-full rounded-full bg-accent" style={{ width: `${Math.min(100, (a.spentToday / a.dailyBudget) * 100 || 0)}%` }} />
                     </div>
                     <div className="mt-1 text-[11px] text-muted">${a.spentToday} of ${a.dailyBudget} today</div>
+
+                    {/* Exactly the workers this agent may hire — the allowlist as
+                        this agent sees it, not the account-wide list. */}
+                    <div className="mt-4 rounded-lg border border-hairline bg-background px-3 py-2">
+                      <div className="flex items-center justify-between">
+                        <div className="text-[10px] uppercase tracking-wider text-muted">Allowlisted workers</div>
+                        <div className="font-mono text-[10px] text-muted">{allowlistForAgent(allowlist, a.id).length}</div>
+                      </div>
+                      {allowlistForAgent(allowlist, a.id).length === 0 ? (
+                        <button
+                          onClick={() => setTab('marketplace')}
+                          className="mt-1 text-left text-[11px] leading-relaxed text-muted underline underline-offset-2 hover:text-foreground"
+                        >
+                          None yet — this agent cannot spend. Add one from the Marketplace.
+                        </button>
+                      ) : (
+                        <ul className="mt-1.5 flex flex-col gap-1">
+                          {allowlistForAgent(allowlist, a.id).map((w) => {
+                            const listing = market.find((l) => l.id === w.listingId);
+                            const price = Number(listing?.price ?? 0);
+                            const overCap = w.cap > 0 && price > w.cap;
+                            const overAction = price > a.perAction;
+                            return (
+                              <li key={w.id} className="flex items-baseline justify-between gap-2 text-[11px]">
+                                <span className="truncate">{w.name}</span>
+                                <span className={`shrink-0 font-mono ${overCap || overAction ? 'text-amber-400' : 'text-muted'}`}>
+                                  {listing ? `$${listing.price}` : '—'} / cap ${w.cap || '∞'}
+                                </span>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </div>
+
                     <div className="mt-4 rounded-lg border border-hairline bg-background px-3 py-2">
                       <div className="text-[10px] uppercase tracking-wider text-muted">Connect this agent to your Claude Code</div>
                       <Copyable value={mcpAddCommand(a)} className="mt-1 break-all font-mono text-[10px] text-muted hover:text-foreground">claude mcp add sovereign -- npx -y sovereign-mcp</Copyable>
@@ -551,7 +641,7 @@ export default function Dashboard() {
                       </div>
                     </div>
                     <div className="mt-3 flex gap-2">
-                      <button onClick={() => setEditAgentId(a.id)} className="flex-1 rounded-lg border border-hairline px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground">Edit limits</button>
+                      <button onClick={() => setEditAgentId(a.id)} className="flex-1 rounded-lg border border-hairline px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground">Edit budgets</button>
                       <button onClick={() => toggleAgent(a.id)} className="flex-1 rounded-lg border border-hairline px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground">{a.status === 'active' ? 'Pause agent' : 'Resume agent'}</button>
                     </div>
                   </div>
@@ -683,6 +773,48 @@ export default function Dashboard() {
                           <button onClick={() => removeWl(w.id)} className="text-sm text-muted transition-colors hover:text-red-400">Remove</button>
                         </div>
                       </div>
+
+                      {/* Scope: which agents this entry authorises. Editable here so
+                          you can re-scope without removing and re-adding. */}
+                      <div className="mt-4 mb-2 border-t border-hairline pt-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-[10px] uppercase tracking-wider text-muted">Usable by</span>
+                          <button
+                            onClick={() => setEntryScope(w.id, null)}
+                            className={`rounded-full border px-2.5 py-1 text-[11px] transition-colors ${
+                              w.agentIds === undefined || w.agentIds === null
+                                ? 'border-accent text-accent'
+                                : 'border-hairline text-muted hover:text-foreground'
+                            }`}
+                          >
+                            All agents
+                          </button>
+                          {agents.map((a) => {
+                            const scoped = Array.isArray(w.agentIds);
+                            const on = scoped && w.agentIds!.includes(a.id);
+                            return (
+                              <button
+                                key={a.id}
+                                onClick={() => {
+                                  const current = Array.isArray(w.agentIds) ? w.agentIds : [];
+                                  const next = on ? current.filter((x) => x !== a.id) : [...current, a.id];
+                                  // Deselecting the last agent would authorise nobody;
+                                  // read that as "back to all agents" instead.
+                                  setEntryScope(w.id, next.length ? next : null);
+                                }}
+                                className={`rounded-full border px-2.5 py-1 text-[11px] transition-colors ${
+                                  on ? 'border-accent text-accent' : 'border-hairline text-muted hover:text-foreground'
+                                }`}
+                              >
+                                {a.name}
+                              </button>
+                            );
+                          })}
+                          {agents.length === 0 && (
+                            <span className="text-[11px] text-muted">No agents yet.</span>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -768,6 +900,14 @@ export default function Dashboard() {
       {hireListing && (
         <HirePayModal listing={hireListing} agents={agents} allowlist={allowlist} onPay={payWorker} onClose={() => setHireId(null)} />
       )}
+      {allowFor && (
+        <AllowlistScopeModal
+          listing={allowFor}
+          agents={agents}
+          onConfirm={(agentIds, cap) => commitAllowlist(allowFor, agentIds, cap)}
+          onClose={() => setAllowFor(null)}
+        />
+      )}
 
       {/* Edit a buyer agent's spend limits */}
       {editAgent && (
@@ -777,6 +917,131 @@ export default function Dashboard() {
           onClose={() => setEditAgentId(null)}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * Picks which buyer agents an allowlisted worker may be hired by.
+ *
+ * Defaults to every agent, since that matches the previous behaviour and is what
+ * most buyers want; scoping is the deliberate choice. The per-call cap lives here
+ * too because it is the other thing you decide at the moment you trust a worker.
+ */
+function AllowlistScopeModal({
+  listing, agents, onConfirm, onClose,
+}: {
+  listing: Listing;
+  agents: BuyerAgent[];
+  onConfirm: (agentIds: string[] | null, cap: number) => void;
+  onClose: () => void;
+}) {
+  const [all, setAll] = useState(true);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [cap, setCap] = useState('5');
+
+  const toggle = (id: string) =>
+    setPicked((list) => (list.includes(id) ? list.filter((x) => x !== id) : [...list, id]));
+
+  const price = Number(listing.price || 0);
+  const capNum = Number(cap) || 0;
+  const ready = all || picked.length > 0;
+
+  // Warn about agents whose own per-action limit would block this worker anyway,
+  // so the buyer does not allowlist something that can never actually be hired.
+  const blocked = (all ? agents : agents.filter((a) => picked.includes(a.id)))
+    .filter((a) => price > a.perAction);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-6" onClick={onClose}>
+      <div className="relative w-full max-w-md rounded-2xl border border-hairline bg-panel p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <button onClick={onClose} aria-label="Close" className="absolute right-4 top-4 text-muted transition-colors hover:text-foreground">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="6" y1="6" x2="18" y2="18" /><line x1="18" y1="6" x2="6" y2="18" /></svg>
+        </button>
+
+        <h2 className="text-lg font-semibold tracking-tight">Allowlist “{listing.name}”</h2>
+        <p className="mt-1 text-sm text-muted">Choose which of your agents may hire this worker.</p>
+
+        <div className="mt-5 flex flex-col gap-2">
+          <button
+            type="button"
+            onClick={() => setAll(true)}
+            className={`flex items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${all ? 'border-accent bg-accent/5' : 'border-hairline hover:border-muted'}`}
+          >
+            <span className={`mt-0.5 h-3.5 w-3.5 shrink-0 rounded-full border ${all ? 'border-accent bg-accent' : 'border-hairline'}`} />
+            <span className="text-sm">
+              All agents
+              <span className="block text-[11px] text-muted">Including any agent you create later.</span>
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setAll(false)}
+            className={`flex items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${!all ? 'border-accent bg-accent/5' : 'border-hairline hover:border-muted'}`}
+          >
+            <span className={`mt-0.5 h-3.5 w-3.5 shrink-0 rounded-full border ${!all ? 'border-accent bg-accent' : 'border-hairline'}`} />
+            <span className="text-sm">
+              Specific agents
+              <span className="block text-[11px] text-muted">Only the agents you tick below.</span>
+            </span>
+          </button>
+        </div>
+
+        {!all && (
+          <div className="mt-3 max-h-52 overflow-y-auto rounded-lg border border-hairline">
+            {agents.map((a) => (
+              <label key={a.id} className="flex cursor-pointer items-center gap-3 border-b border-hairline px-3 py-2.5 last:border-b-0 hover:bg-background">
+                <input
+                  type="checkbox"
+                  checked={picked.includes(a.id)}
+                  onChange={() => toggle(a.id)}
+                  className="accent-[color:var(--accent)]"
+                />
+                <span className="flex-1 text-sm">
+                  {a.name}
+                  <span className="block font-mono text-[10px] text-muted">
+                    ${a.perAction} per action · ${a.spentToday} of ${a.dailyBudget} today
+                  </span>
+                </span>
+                <Pill kind={a.status} />
+              </label>
+            ))}
+          </div>
+        )}
+
+        <label className="mt-4 block text-sm">
+          <span className="text-muted">Per-call cap for this worker (USDC)</span>
+          <input
+            value={cap}
+            onChange={(e) => setCap(e.target.value)}
+            inputMode="decimal"
+            className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent"
+          />
+        </label>
+
+        {capNum > 0 && price > capNum && (
+          <div className="mt-2 text-[11px] leading-relaxed text-amber-400">
+            This worker charges ${price} per call, above the ${capNum} cap — every hire would be refused.
+          </div>
+        )}
+        {blocked.length > 0 && (
+          <div className="mt-2 text-[11px] leading-relaxed text-amber-400">
+            {blocked.map((a) => a.name).join(', ')} {blocked.length === 1 ? 'has a' : 'have'} per-action limit below ${price}, so {blocked.length === 1 ? 'it' : 'they'} still could not hire this worker.
+          </div>
+        )}
+
+        <div className="mt-5 flex gap-3">
+          <button
+            disabled={!ready}
+            onClick={() => onConfirm(all ? null : picked, capNum)}
+            className="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40"
+          >
+            {all ? 'Allowlist for all agents' : `Allowlist for ${picked.length || 'no'} agent${picked.length === 1 ? '' : 's'}`}
+          </button>
+          <button onClick={onClose} className="rounded-lg border border-hairline px-4 py-2.5 text-sm text-muted hover:text-foreground">Cancel</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1347,7 +1612,7 @@ function EditAgentModal({
 
   return (
     <ModalShell onClose={onClose}>
-      <h2 className="text-lg font-semibold tracking-tight">Edit limits</h2>
+      <h2 className="text-lg font-semibold tracking-tight">Edit budgets</h2>
       <p className="mt-1 text-sm text-muted">Spending rules for {agent.name}. Enforced before every hire.</p>
       <div className="mt-5 flex flex-col gap-3">
         <label className="text-sm"><span className="text-muted">Daily budget (USDC)</span>

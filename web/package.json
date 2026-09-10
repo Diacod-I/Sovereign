@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:probe": "node test/probe.e2e.mjs",
+    "test:probe:fixture": "node test/probe.fixture.e2e.mjs"
   },
   "dependencies": {
     "@graphprotocol/graph-cli": "^0.98.1",
