@@ -1,0 +1,19 @@
+{
+  "name": "sovereign-worker",
+  "version": "0.1.0",
+  "description": "Template x402-gated worker endpoint for a Sovereign seller agent (verify → serve → settle on Arc via Circle Gateway).",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": ["x402", "arc", "usdc", "circle-gateway", "sovereign", "agents"],
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.21.2"
+  },
+  "optionalDependencies": {
+    "@circle-fin/x402-batching": "*"
+  },
+  "engines": { "node": ">=18" }
+}
