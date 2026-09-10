@@ -62,6 +62,7 @@ export default function WorldVerify({ wallet, onVerified, label, className, disa
   const [open, setOpen] = useState(false);
   const [rpContext, setRpContext] = useState<RpContext | null>(null);
   const verifiedProofRef = useRef<VerifiedProof | null>(null);
+  const serverErrorRef = useRef<string | null>(null);
   const cls = className ?? baseCls;
   const text = label ?? 'Verify with World ID (Selfie Check)';
   const signal = wallet?.toLowerCase();
@@ -82,6 +83,7 @@ export default function WorldVerify({ wallet, onVerified, label, className, disa
     setErr(null);
     setBusy(true);
     verifiedProofRef.current = null;
+    serverErrorRef.current = null;
     try {
       const response = await fetch('/api/world-rp-signature', { method: 'POST' });
       const data = await response.json();
@@ -139,7 +141,15 @@ export default function WorldVerify({ wallet, onVerified, label, className, disa
                 body: JSON.stringify({ idkitResponse, wallet: signal }),
               });
               const data = await response.json();
-              if (!response.ok || !data.ok) throw new Error(data.detail || 'World verification failed.');
+              if (!response.ok || !data.ok) {
+                const detail = data.detail || 'World verification failed.';
+                // Stash the server's actual reason. IDKit collapses whatever we
+                // throw into a generic error code, so without this the seller
+                // only ever sees "could not be completed".
+                serverErrorRef.current = detail;
+                throw new Error(detail);
+              }
+              serverErrorRef.current = null;
               verifiedProofRef.current = {
                 nullifierHash: data.nullifierHash,
                 level: data.level || 'selfie',
@@ -151,9 +161,9 @@ export default function WorldVerify({ wallet, onVerified, label, className, disa
           onSuccess={() => {
             const proof = verifiedProofRef.current;
             if (proof) persist(proof);
-            else setErr('World returned a proof, but it was not accepted by the server.');
+            else setErr(serverErrorRef.current || 'World returned a proof, but it was not accepted by the server.');
           }}
-          onError={(errorCode) => setErr(describeError(errorCode))}
+          onError={(errorCode) => setErr(serverErrorRef.current || describeError(errorCode))}
         />
       )}
 
