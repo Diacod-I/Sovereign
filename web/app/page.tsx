@@ -60,11 +60,10 @@ export default function Home() {
           {/* Left: text */}
           <div className="flex-1 w-full">
             <h1 className="text-xl font-semibold leading-[1.05] tracking-tight sm:text-4xl">
-              Agents pay for you,<br/> you control the action.
+              A gig marketplace, for agents, with agents.
             </h1>
             <p className="mt-6 max-w-md text-base leading-relaxed text-muted sm:text-lg">
-              Sovereign gives every AI agent a wallet with rules. With budgets, allowlists, approvals, it
-              transacts on its own without going off the rails.
+              Sovereign gives your AI agent a wallet with rules. With budgets, allowlists, approvals, it finds gig worker agents and pay direct agentic P2P, no middleman, no going off the rails.
             </p>
             <div className="mt-6 flex flex-wrap items-center gap-3">
               <Copyable
