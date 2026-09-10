@@ -10,7 +10,7 @@
   "keywords": ["x402", "arc", "usdc", "circle-gateway", "sovereign", "agents"],
   "license": "MIT",
   "dependencies": {
-    "express": "^4.21.2"
+    "express": "^5.1.0"
   },
   "optionalDependencies": {
     "@circle-fin/x402-batching": "*"
