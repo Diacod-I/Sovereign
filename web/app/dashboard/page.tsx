@@ -687,10 +687,10 @@ function Onboarding({ user, logout, onDone }: { user: any; logout: () => void; o
     <div className="flex min-h-screen items-center justify-center px-6">
       <div className="w-full max-w-md rounded-2xl border border-hairline bg-panel p-7">
         <Brand />
-        <h1 className="mt-6 text-xl font-semibold tracking-tight">Create your organization</h1>
+        <h1 className="mt-6 text-xl font-semibold tracking-tight">Create your Treasury Wallet</h1>
         <p className="mt-2 text-sm text-muted">This is the account your agents and their spending rules live under.</p>
         <label className="mt-6 block text-sm">
-          <span className="text-muted">Company name</span>
+          <span className="text-muted">Name</span>
           <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme Inc." className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2.5 outline-none focus:border-accent" onKeyDown={(e) => { if (e.key === 'Enter' && name.trim()) onDone(name.trim()); }} />
         </label>
         <div className="mt-3 rounded-lg border border-hairline bg-background px-3 py-2.5 text-sm">
