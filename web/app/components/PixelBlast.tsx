@@ -352,14 +352,7 @@ const PixelBlast = ({
     if (mustReinit) {
       if (threeRef.current) {
         const t = threeRef.current;
-        t.resizeObserver?.disconnect();
-        cancelAnimationFrame(t.raf);
-        t.quad?.geometry.dispose();
-        t.material.dispose();
-        t.composer?.dispose();
-        t.renderer.dispose();
-        t.renderer.forceContextLoss();
-        if (t.renderer.domElement.parentElement === container) container.removeChild(t.renderer.domElement);
+        t.dispose();
         threeRef.current = null;
       }
       const canvas = document.createElement('canvas');
@@ -503,7 +496,26 @@ const PixelBlast = ({
         passive: true
       });
       let raf = 0;
+      let disposed = false;
+      const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        ro.disconnect();
+        cancelAnimationFrame(raf);
+        renderer.domElement.removeEventListener('pointerdown', onPointerDown);
+        renderer.domElement.removeEventListener('pointermove', onPointerMove);
+        quad.geometry.dispose();
+        material.dispose();
+        composer?.dispose();
+        renderer.dispose();
+        renderer.forceContextLoss();
+        if (renderer.domElement.parentElement === container) container.removeChild(renderer.domElement);
+      };
       const animate = () => {
+        // An older animation callback can otherwise fire after React Fast Refresh,
+        // Strict Mode, or a prop-driven reinitialization has disposed this renderer.
+        // Rendering a lost WebGL context is what causes the invalid WebGLShader error.
+        if (disposed) return;
         if (autoPauseOffscreen && !visibilityRef.current.visible) {
           raf = requestAnimationFrame(animate);
           return;
@@ -535,6 +547,7 @@ const PixelBlast = ({
         uniforms,
         resizeObserver: ro,
         raf,
+        dispose,
         quad,
         timeOffset,
         composer,
@@ -569,14 +582,7 @@ const PixelBlast = ({
       if (threeRef.current && mustReinit) return;
       if (!threeRef.current) return;
       const t = threeRef.current;
-      t.resizeObserver?.disconnect();
-      cancelAnimationFrame(t.raf);
-      t.quad?.geometry.dispose();
-      t.material.dispose();
-      t.composer?.dispose();
-      t.renderer.dispose();
-      t.renderer.forceContextLoss();
-      if (t.renderer.domElement.parentElement === container) container.removeChild(t.renderer.domElement);
+      t.dispose();
       threeRef.current = null;
     };
   }, [
@@ -613,4 +619,3 @@ const PixelBlast = ({
 };
 
 export default PixelBlast;
-

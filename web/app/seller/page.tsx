@@ -10,6 +10,8 @@ import Avatar from '../components/Avatar';
 import { useWalletData, useWithdraw, BalanceCard, ActivityFeed, DepositModal, WithdrawModal } from '../components/wallet';
 import { buildBalanceSeries, fetchAgentsByOwner, fetchReceived, formatUsdc, txUrl, type RangeKey, type RegistryAgent } from '../lib/arc';
 import { useRegistry, type ListingInput } from '../lib/registry';
+import WorldVerify from '../components/WorldVerify';
+import { readVerification, shortNullifier, levelLabel, type SellerVerification } from '../lib/world';
 
 type Tab = 'overview' | 'agents' | 'profile';
 type Agent = RegistryAgent;
@@ -66,6 +68,7 @@ export default function SellerDashboard() {
   const [pName, setPName] = useState('');
   const [pBio, setPBio] = useState('');
   const [profileSaved, setProfileSaved] = useState(false);
+  const [worldV, setWorldV] = useState<SellerVerification | null>(null);
 
   // worker edit modal
   const [editId, setEditId] = useState<string | null>(null);
@@ -95,6 +98,11 @@ export default function SellerDashboard() {
     } catch {}
     setSellerReady(true);
   }, []);
+
+  // Real World ID state for this wallet (minimal tier — persisted locally by WorldVerify).
+  useEffect(() => {
+    setWorldV(readVerification(walletAddress));
+  }, [walletAddress]);
 
   // Load the agents this wallet owns from the subgraph.
   useEffect(() => {
@@ -373,11 +381,25 @@ export default function SellerDashboard() {
                   <Avatar name={pName || seller || 'S'} size={56} />
                   <div>
                     <div className="font-medium">{pName || seller}</div>
-                    <div className="mt-0.5 inline-flex items-center gap-1 text-xs text-accent">
-                      <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent" />World ID verified
-                    </div>
+                    {worldV ? (
+                      <div className="mt-0.5 inline-flex items-center gap-1 text-xs text-accent">
+                        <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent" />
+                        World ID verified · unique human · {levelLabel(worldV.level)}
+                        {worldV.nullifierHash !== 'demo' && (
+                          <span className="font-mono text-muted"> · {shortNullifier(worldV.nullifierHash)}</span>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="mt-0.5 text-xs text-muted">Not verified as a unique human</div>
+                    )}
                   </div>
                 </div>
+
+                {!worldV && (
+                  <div className="mt-4 max-w-xs">
+                    <WorldVerify wallet={user?.wallet?.address} onVerified={setWorldV} label="Verify with World ID" />
+                  </div>
+                )}
 
                 <div className="mt-6 flex flex-col gap-4">
                   <label className="text-sm">
@@ -537,13 +559,15 @@ function SellerOnboarding({ user, logout, onDone }: { user: any; logout: () => v
           <span className="text-muted">Display name</span>
           <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Maya Chen" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2.5 outline-none focus:border-accent" />
         </label>
-        <button
-          onClick={() => setVerified(true)}
-          disabled={verified}
-          className={`mt-3 w-full rounded-lg px-4 py-2.5 text-sm font-medium transition-colors ${verified ? 'cursor-default border border-accent text-accent' : 'border border-hairline text-foreground hover:border-accent'}`}
-        >
-          {verified ? 'World ID verified ✓' : 'Verify with World ID (Selfie Check)'}
-        </button>
+        <div className="mt-3">
+          {verified ? (
+            <div className="w-full rounded-lg border border-accent px-4 py-2.5 text-center text-sm font-medium text-accent">
+              World ID verified ✓
+            </div>
+          ) : (
+            <WorldVerify wallet={user?.wallet?.address} onVerified={() => setVerified(true)} />
+          )}
+        </div>
         <div className="mt-3 rounded-lg border border-hairline bg-background px-3 py-2.5 text-sm">
           <div className="text-[11px] uppercase tracking-wider text-muted">Payout wallet</div>
           {user?.wallet?.address ? (
