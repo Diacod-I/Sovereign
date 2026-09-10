@@ -41,7 +41,7 @@ const INITIAL_ALLOWLIST: { id: string; listingId: string; name: string; address:
 type BuyerAgent = (typeof INITIAL_AGENTS)[number];
 type AllowEntry = (typeof INITIAL_ALLOWLIST)[number];
 
-// ADD 4 — buyer spend policy. Governs every "Hire & pay" before the transfer signs.
+// Buyer spend policy. Governs every "Hire & pay" before the transfer signs.
 type PolicyVerdict =
   | { ok: true; needsApproval: boolean }
   | { ok: false; reason: string };
@@ -188,7 +188,7 @@ export default function Dashboard() {
   const [allowlist, setAllowlist] = useState<AllowEntry[]>(INITIAL_ALLOWLIST);
   const [policyReady, setPolicyReady] = useState(false);
 
-  // marketplace "Hire & pay" (ADD 2) + spend-policy enforcement (ADD 4)
+  // marketplace "Hire & pay" + spend-policy enforcement
   const [hireId, setHireId] = useState<string | null>(null);
   const [editAgentId, setEditAgentId] = useState<string | null>(null);
 
@@ -239,7 +239,7 @@ export default function Dashboard() {
     setPolicyReady(true);
   }, []);
 
-  // Persist buyer policy + allowlist locally so limits survive a reload (ADD 4).
+  // Persist buyer policy + allowlist locally so limits survive a reload.
   useEffect(() => {
     if (!policyReady) return;
     try {
@@ -332,9 +332,9 @@ export default function Dashboard() {
     return hash;
   };
 
-  // ADD 2 — real buyer→seller settlement: a native USDC value transfer on Arc, same
-  // signing path as withdraw. 18-dp here (native value), not the 6-dp on-chain price
-  // field. The HirePayModal enforces the spend policy (ADD 4) before this runs; on
+  // Buyer→seller settlement: native USDC value transfer on Arc, same
+  // signing path as withdraw. 18-dp here (native value).
+  // The HirePayModal enforces the spend policy before this runs. On
   // success we roll the paying agent's spentToday forward.
   const payWorker = async (l: Listing, agentId: string): Promise<string> => {
     if (!walletAddress) throw new Error('No wallet');
@@ -664,12 +664,12 @@ export default function Dashboard() {
         <WithdrawModal address={walletAddress} balance={balance} onWithdraw={withdraw} onClose={() => setShowWithdraw(false)} />
       )}
 
-      {/* Hire & pay a worker (ADD 2) — gated by the buyer spend policy (ADD 4) */}
+      {/* Hire & pay a worker, gated by the buyer spend policy */}
       {hireListing && (
         <HirePayModal listing={hireListing} agents={agents} allowlist={allowlist} onPay={payWorker} onClose={() => setHireId(null)} />
       )}
 
-      {/* Edit a buyer agent's spend limits (ADD 4) */}
+      {/* Edit a buyer agent's spend limits */}
       {editAgent && (
         <EditAgentModal
           agent={editAgent}
@@ -1111,6 +1111,151 @@ function WithdrawModal({
           </div>
         </>
       )}
+    </ModalShell>
+  );
+}
+
+// Hire a marketplace worker and settle in USDC on Arc, but only
+// after the selected buyer agent's spend policy clears. A call at/above the
+// approval threshold needs an explicit tick before it can send.
+function HirePayModal({
+  listing, agents, allowlist, onPay, onClose,
+}: {
+  listing: Listing;
+  agents: BuyerAgent[];
+  allowlist: AllowEntry[];
+  onPay: (l: Listing, agentId: string) => Promise<string>;
+  onClose: () => void;
+}) {
+  const price = Number(listing.price || 0);
+  const [agentId, setAgentId] = useState(agents.find((a) => a.status === 'active')?.id ?? agents[0]?.id ?? '');
+  const [approved, setApproved] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [hash, setHash] = useState<string | null>(null);
+
+  const agent = agents.find((a) => a.id === agentId) || null;
+  const verdict: PolicyVerdict = agent
+    ? checkPolicy(agent, price, listing.payTo, allowlist)
+    : { ok: false, reason: 'No agent selected.' };
+  const needsApproval = verdict.ok && verdict.needsApproval;
+  const canPay = verdict.ok && !busy && (!needsApproval || approved);
+
+  const submit = async () => {
+    if (!canPay || !agent) return;
+    setErr(null);
+    setBusy(true);
+    try {
+      setHash(await onPay(listing, agent.id));
+    } catch (e: any) {
+      setErr(e?.message ? String(e.message) : 'Transaction failed or was rejected.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <ModalShell onClose={onClose}>
+      <h2 className="text-lg font-semibold tracking-tight">Hire &amp; pay</h2>
+      {hash ? (
+        <>
+          <div className="mt-4 flex items-center gap-2 rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 text-sm text-accent">
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent" />
+            Paid {formatUsdc(price)} USDC to {listing.name}
+          </div>
+          <p className="mt-3 text-sm text-muted">To <span className="font-mono">{shortHash(listing.payTo)}</span>. Both dashboards update shortly.</p>
+          <a href={txUrl(hash)} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 font-mono text-xs text-muted underline-offset-2 hover:text-foreground hover:underline">
+            View on Arcscan <ArrowUpRight />
+          </a>
+          <button onClick={onClose} className="mt-5 w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black">Done</button>
+        </>
+      ) : (
+        <>
+          <p className="mt-1 text-sm text-muted">A real USDC transfer on Arc from your treasury to the worker&apos;s payout address.</p>
+          <div className="mt-4 rounded-lg border border-hairline bg-background p-3 text-sm">
+            <div className="flex items-center justify-between"><span className="text-muted">Worker</span><span>{listing.name}</span></div>
+            <div className="mt-1 flex items-center justify-between"><span className="text-muted">Pays to</span><span className="font-mono text-xs">{shortHash(listing.payTo)}</span></div>
+            <div className="mt-1 flex items-center justify-between"><span className="text-muted">Price</span><span className="font-mono">{listing.price} USDC</span></div>
+          </div>
+
+          <label className="mt-4 block text-sm">
+            <span className="text-muted">Paying agent</span>
+            <select
+              value={agentId}
+              onChange={(e) => { setAgentId(e.target.value); setApproved(false); }}
+              className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 text-sm outline-none focus:border-accent"
+            >
+              {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+          </label>
+          {agent && (
+            <div className="mt-2 text-[11px] text-muted">
+              per-action ${agent.perAction} · today ${agent.spentToday}/${agent.dailyBudget} · approval over ${agent.approvalThreshold}
+            </div>
+          )}
+
+          {!verdict.ok && (
+            <div className="mt-3 flex items-center gap-2 rounded-lg border border-red-400/30 bg-red-400/5 px-3 py-2 text-[11px] text-red-400">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-red-400" />
+              Blocked by policy — {verdict.reason}
+            </div>
+          )}
+          {needsApproval && (
+            <label className="mt-3 flex items-start gap-2 rounded-lg border border-hairline bg-background px-3 py-2 text-[11px] text-muted">
+              <input type="checkbox" checked={approved} onChange={(e) => setApproved(e.target.checked)} className="mt-0.5" />
+              This call is at or above your approval threshold. I approve this spend.
+            </label>
+          )}
+          {err && <div className="mt-3 rounded-lg border border-red-400/30 bg-red-400/5 px-3 py-2 text-[11px] text-red-400">{err}</div>}
+
+          <div className="mt-5 flex gap-3">
+            <button disabled={!canPay} onClick={submit} className="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40">
+              {busy ? 'Confirm in wallet…' : `Pay ${listing.price} USDC`}
+            </button>
+            <button onClick={onClose} className="rounded-lg border border-hairline px-4 py-2.5 text-sm text-muted hover:text-foreground">Cancel</button>
+          </div>
+        </>
+      )}
+    </ModalShell>
+  );
+}
+
+function EditAgentModal({
+  agent, onSave, onClose,
+}: {
+  agent: BuyerAgent;
+  onSave: (patch: Partial<BuyerAgent>) => void;
+  onClose: () => void;
+}) {
+  const [dailyBudget, setDailyBudget] = useState(String(agent.dailyBudget));
+  const [perAction, setPerAction] = useState(String(agent.perAction));
+  const [approvalThreshold, setApprovalThreshold] = useState(String(agent.approvalThreshold));
+
+  const save = () => {
+    onSave({
+      dailyBudget: Number(dailyBudget) || 0,
+      perAction: Number(perAction) || 0,
+      approvalThreshold: Number(approvalThreshold) || 0,
+    });
+    onClose();
+  };
+
+  return (
+    <ModalShell onClose={onClose}>
+      <h2 className="text-lg font-semibold tracking-tight">Edit limits</h2>
+      <p className="mt-1 text-sm text-muted">Spending rules for {agent.name}. Enforced before every hire.</p>
+      <div className="mt-5 flex flex-col gap-3">
+        <label className="text-sm"><span className="text-muted">Daily budget (USDC)</span>
+          <input value={dailyBudget} onChange={(e) => setDailyBudget(e.target.value)} inputMode="decimal" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" /></label>
+        <label className="text-sm"><span className="text-muted">Per action (USDC)</span>
+          <input value={perAction} onChange={(e) => setPerAction(e.target.value)} inputMode="decimal" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" /></label>
+        <label className="text-sm"><span className="text-muted">Require approval over (USDC)</span>
+          <input value={approvalThreshold} onChange={(e) => setApprovalThreshold(e.target.value)} inputMode="decimal" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" /></label>
+      </div>
+      <div className="mt-5 flex gap-3">
+        <button onClick={save} className="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90">Save limits</button>
+        <button onClick={onClose} className="rounded-lg border border-hairline px-4 py-2.5 text-sm text-muted hover:text-foreground">Cancel</button>
+      </div>
     </ModalShell>
   );
 }

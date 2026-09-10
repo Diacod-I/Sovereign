@@ -153,8 +153,6 @@ export default function SellerDashboard() {
     payTo: f.payTo.trim() || walletAddress || '',
   });
 
-  // ADD 1 — real on-chain register(): sign an AgentRegistry tx with the embedded
-  // wallet, optimistically show the row, then reconcile from the subgraph.
   const createAgent = async () => {
     const input = fToInput();
     if (!input.name || !input.price || txPending) return;
@@ -177,7 +175,6 @@ export default function SellerDashboard() {
     }
   };
 
-  // ADD 1 — setActive(): deactivate / reactivate a listing on-chain.
   const toggle = async (id: string) => {
     const a = agents.find((x) => x.id === id);
     if (!a || txPending) return;
@@ -195,8 +192,6 @@ export default function SellerDashboard() {
     }
   };
 
-  // ADD 1 — update(): push edited public details on-chain. Rejects propagate so the
-  // edit modal can stay open.
   const updateAgent = async (id: string, input: ListingInput): Promise<void> => {
     if (txPending) return;
     setTxError(null); setTxNote(null); setTxPending(`Updating “${input.name}”…`);
