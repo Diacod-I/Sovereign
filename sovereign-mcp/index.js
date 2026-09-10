@@ -5,7 +5,13 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { hasAutonomousKeys, settleAndCall } from './x402.js';
+import {
+  agentBalances,
+  autonomousDisabledReason,
+  depositToGateway,
+  hasAutonomousKeys,
+  settleAndCall,
+} from './x402.js';
 
 const SUBGRAPH_URL = process.env.SUBGRAPH_URL;
 const usdc = (base) => (Number(base) / 1e6).toString();
@@ -133,23 +139,27 @@ server.tool(
     const a = agents.find((x) => x.id === agentId);
     if (!a) return { content: [{ type: 'text', text: `No active agent with id "${agentId}".` }], isError: true };
 
-    // Autonomous settle+call when the operator provisioned server-signing
-    // keys (Privy server wallet + Circle Gateway). Otherwise fall through to the
-    // keyless payment intent below.
+    // Autonomous settle+call when the operator provisioned an agent key. The
+    // x402 handshake (402 → sign → retry → 200) happens inside settleAndCall.
+    // Anything short of a real settlement falls through to the keyless intent.
     let autonomousNote = '';
     if (hasAutonomousKeys()) {
       try {
         const { output, settlement } = await settleAndCall(a, input);
         return { content: [{ type: 'text', text: [
           `Agent: ${a.name} (${a.id}) — PAID ${settlement.amount} USDC → ${settlement.payTo} on ${settlement.network}`,
+          settlement.transaction ? `Settlement tx: ${settlement.transaction}` : '',
           ``,
           `WORKER OUTPUT:\n${typeof output === 'string' ? output : JSON.stringify(output, null, 2)}`,
           ``,
           `SETTLEMENT:\n${JSON.stringify(settlement, null, 2)}`,
-        ].join('\n') }] };
+        ].filter(Boolean).join('\n') }] };
       } catch (e) {
         autonomousNote = `(autonomous payment unavailable — ${e.message}; returning a manual payment intent)\n\n`;
       }
+    } else {
+      const why = autonomousDisabledReason();
+      if (why) autonomousNote = `(keyless mode — ${why})\n\n`;
     }
 
     const result = await invokeWorker(a.endpoint, input);
@@ -174,5 +184,50 @@ server.tool(
   }
 );
 
+server.tool(
+  'agent_wallet',
+  "Show the buyer agent's own payment wallet: its address, on-chain USDC balance, and Circle Gateway balance (the runway x402 nanopayments draw from). Only available in autonomous mode.",
+  {},
+  async () => {
+    if (!hasAutonomousKeys()) {
+      return { content: [{ type: 'text', text:
+        `Keyless mode — ${autonomousDisabledReason()}. There is no agent wallet; payments are confirmed by the human in the Sovereign web app.` }] };
+    }
+    try {
+      const { address, chain, balances } = await agentBalances();
+      return { content: [{ type: 'text', text: [
+        `Agent wallet: ${address} on ${chain}`,
+        `Wallet USDC:  ${balances?.wallet?.formatted ?? '?'}`,
+        `Gateway USDC: ${balances?.gateway?.formatted ?? balances?.available?.formatted ?? '?'}  ← spendable over x402`,
+        ``,
+        `Top the Gateway balance up with the fund_agent tool if it is low.`,
+      ].join('\n') }] };
+    } catch (e) {
+      return { content: [{ type: 'text', text: `Could not read balances: ${e.message}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'fund_agent',
+  "Move USDC from the agent's own wallet into its Circle Gateway balance, which is what x402 payments draw from. Run this once before the agent starts paying workers.",
+  { amount: z.string().describe('Whole USDC to deposit, e.g. "5"') },
+  async ({ amount }) => {
+    if (!hasAutonomousKeys()) {
+      return { content: [{ type: 'text', text: `Keyless mode — ${autonomousDisabledReason()}.` }], isError: true };
+    }
+    try {
+      const r = await depositToGateway(amount);
+      return { content: [{ type: 'text', text:
+        `Deposited ${r.formattedAmount ?? amount} USDC into Gateway for ${r.depositor}.\ndeposit tx: ${r.depositTxHash}` }] };
+    } catch (e) {
+      return { content: [{ type: 'text', text: `Deposit failed: ${e.message}` }], isError: true };
+    }
+  }
+);
+
 await server.connect(new StdioServerTransport());
-console.error('sovereign-mcp running (stdio). SUBGRAPH_URL ' + (SUBGRAPH_URL ? 'set' : 'NOT set'));
+console.error(
+  'sovereign-mcp running (stdio). SUBGRAPH_URL ' + (SUBGRAPH_URL ? 'set' : 'NOT set') +
+  ' — payments: ' + (hasAutonomousKeys() ? 'AUTONOMOUS (x402 via Circle Gateway)' : 'keyless (human confirms in the web app)')
+);

@@ -74,7 +74,7 @@ export default function Home() {
               A gig marketplace, for agents, with agents.
             </h1>
             <p className="mt-6 max-w-md text-base leading-relaxed text-muted sm:text-lg">
-              Sovereign gives your AI agent a wallet with rules. With budgets, allowlists, approvals, it finds gig worker agents and pay direct agentic P2P, no middleman, no going off the rails.
+              Sovereign gives your AI agent a wallet with rules. With budgets, allowlists, approvals, it finds gig worker agents and pay via direct agentic P2P transfers, no middleman, no going off the rails.
             </p>
             <div className="mt-6 flex flex-wrap items-center gap-3">
               <Copyable

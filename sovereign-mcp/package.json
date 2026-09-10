@@ -36,11 +36,11 @@
     "directory": "sovereign-mcp"
   },
   "dependencies": {
+    "@circle-fin/x402-batching": "^3.4.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "@x402/core": "^2.25.0",
+    "@x402/evm": "^2.25.0",
+    "viem": "^2.56.3",
     "zod": "^3.23.0"
-  },
-  "optionalDependencies": {
-    "@privy-io/server-auth": "*",
-    "@circle-fin/x402-batching": "*"
   }
 }
