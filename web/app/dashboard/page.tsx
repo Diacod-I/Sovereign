@@ -12,6 +12,12 @@ import Avatar from '../components/Avatar';
 import Cover from '../components/Cover';
 import { useEmbeddedWallet } from '../lib/useEmbeddedWallet';
 import {
+  TRACK_RECORD_FIELDS, addPending, fetchReceipts, readPending, removePending,
+  receiptsConfigured, toTrackRecord, useFileReceipt,
+  type PendingReview, type ReceiptRow,
+} from '../lib/receipts';
+import { MET_COLOR, MET_LABEL, formatLatency, scoreOf, type Score, type TrackRecord } from '../lib/reputation';
+import {
   ARC_CHAIN_ID,
   FAUCET_URL,
   RANGES,
@@ -157,6 +163,8 @@ type Listing = {
   payTo: string;
   owner: string;
   endpoint: string;
+  /** Aggregated from on-chain receipts. Empty until anyone has hired it. */
+  record: TrackRecord;
 };
 
 const SUBGRAPH_URL =
@@ -165,15 +173,28 @@ const SUBGRAPH_URL =
 
 // Live discovery — reads active agents straight from the Sovereign subgraph.
 async function fetchMarket(): Promise<Listing[]> {
+  // Track-record fields ride along with discovery so the marketplace can rank and
+  // badge without a second round trip per listing.
   const query =
-    '{ agents(where: { active: true }, orderBy: createdAt, orderDirection: desc, first: 100) { id name description tags endpoint pricePerCall payTo owner } }';
-  const res = await fetch(SUBGRAPH_URL, {
+    `{ agents(where: { active: true }, orderBy: createdAt, orderDirection: desc, first: 100) { id name description tags endpoint pricePerCall payTo owner ${TRACK_RECORD_FIELDS} } }`;
+  let json = await (await fetch(SUBGRAPH_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ query }),
-  });
-  const json = await res.json();
-  if (json.errors) throw new Error('subgraph error');
+  })).json();
+  // Before the Receipts datasource is deployed the aggregate fields do not exist
+  // and the whole query 400s. Fall back to plain discovery rather than showing an
+  // empty marketplace.
+  if (json.errors) {
+    const bare =
+      '{ agents(where: { active: true }, orderBy: createdAt, orderDirection: desc, first: 100) { id name description tags endpoint pricePerCall payTo owner } }';
+    json = await (await fetch(SUBGRAPH_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query: bare }),
+    })).json();
+    if (json.errors) throw new Error('subgraph error');
+  }
   return (json.data?.agents ?? []).map((a: any) => ({
     id: a.id,
     name: a.name,
@@ -183,6 +204,7 @@ async function fetchMarket(): Promise<Listing[]> {
     payTo: a.payTo,
     owner: a.owner,
     endpoint: a.endpoint,
+    record: toTrackRecord(a),
   }));
 }
 
@@ -226,16 +248,98 @@ function ArrowUpRight({ size = 12 }: { size?: number }) {
   );
 }
 
+/** Compact reputation badge for marketplace cards. */
+function ScoreBadge({ record }: { record: TrackRecord }) {
+  const sc = scoreOf(record);
+  if (sc.overall === null) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-hairline px-2 py-0.5 font-mono text-[10px] text-muted">
+        Unproven
+      </span>
+    );
+  }
+  const tone = sc.overall >= 75 ? 'text-accent border-accent/40' : sc.overall >= 50 ? 'text-amber-400 border-amber-400/40' : 'text-red-400 border-red-400/40';
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[10px] ${tone}`}>
+      {sc.overall}
+      <span className="text-muted">· {record.receiptCount} call{record.receiptCount === 1 ? '' : 's'}</span>
+    </span>
+  );
+}
+
+/** The four axes, as bars. Null axes render as "not enough evidence". */
+function ScoreAxes({ score }: { score: Score }) {
+  return (
+    <div className="flex flex-col gap-2.5">
+      {score.axes.map((ax) => (
+        <div key={ax.key}>
+          <div className="flex items-baseline justify-between text-[11px]">
+            <span className="text-muted">{ax.label}</span>
+            <span className={`font-mono ${ax.value === null ? 'text-muted' : ''}`}>{ax.display}</span>
+          </div>
+          <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-[#1c1c1c]">
+            <div
+              className={`h-full rounded-full ${ax.value === null ? 'bg-[#2a2a2a]' : 'bg-accent'}`}
+              style={{ width: ax.value === null ? '100%' : `${Math.round(ax.value * 100)}%` }}
+            />
+          </div>
+          <div className="mt-1 text-[10px] leading-relaxed text-muted">{ax.hint}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** One piece of previous work: what was asked for, and whether it landed. */
+function ReceiptRowView({ r }: { r: ReceiptRow }) {
+  return (
+    <li className="border-t border-hairline py-2.5 first:border-t-0 first:pt-0">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[11px]">
+            {r.expectation || <span className="text-muted">no expectation recorded</span>}
+          </div>
+          {r.note && <div className="mt-0.5 text-[10px] leading-relaxed text-muted">{r.note}</div>}
+        </div>
+        <span className={`shrink-0 font-mono text-[10px] ${MET_COLOR[r.met] ?? 'text-muted'}`}>
+          {MET_LABEL[r.met] ?? '—'}
+        </span>
+      </div>
+      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[10px] text-muted">
+        <span>{short(r.buyer)}</span>
+        <span>{formatUsdc(r.amount)} USDC</span>
+        {r.latencyMs > 0 && <span>{formatLatency(r.latencyMs)}</span>}
+        {!r.delivered && <span className="text-red-400">no output</span>}
+        <span>{relTime(r.at * 1000)}</span>
+      </div>
+    </li>
+  );
+}
+
 // The MCP detail body — shown in the click modal. Every field here is on-chain.
 function McpDetails({ l }: { l: Listing }) {
   const tags = l.tags ? l.tags.split(',').map((t) => t.trim()).filter(Boolean) : [];
+  const score = scoreOf(l.record);
+  const [history, setHistory] = useState<ReceiptRow[] | null>(null);
+
+  // Previous work is fetched lazily — the marketplace grid only needs the
+  // aggregates, and most listings are never opened.
+  useEffect(() => {
+    let alive = true;
+    fetchReceipts(l.id, 12).then((rows) => { if (alive) setHistory(rows); });
+    return () => { alive = false; };
+  }, [l.id]);
+
   return (
     <>
       <div className="flex items-center gap-3">
         <Avatar name={l.name} size={40} />
-        <div>
-          <div className="font-medium">{l.name}</div>
-          <div className="text-xs text-muted">by <span className="font-mono">{short(l.owner)}</span></div>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="font-medium">{l.name}</span>
+            <ScoreBadge record={l.record} />
+          </div>
+          <div className="text-xs text-muted">by <span className="font-mono">{short(l.owner)}</span> · {score.tierLabel}</div>
         </div>
       </div>
 
@@ -248,6 +352,41 @@ function McpDetails({ l }: { l: Listing }) {
           ))}
         </div>
       )}
+
+      <div className="mt-4 rounded-lg border border-hairline bg-background p-3">
+        <div className="flex items-baseline justify-between">
+          <span className="text-[10px] uppercase tracking-wider text-muted">Track record</span>
+          {score.overall !== null && (
+            <span className="font-mono text-[10px] text-muted">
+              {l.record.receiptCount} graded call{l.record.receiptCount === 1 ? '' : 's'} · {formatUsdc(l.record.totalPaid)} USDC earned
+            </span>
+          )}
+        </div>
+        <div className="mt-2.5">
+          <ScoreAxes score={score} />
+        </div>
+        {score.overall === null && (
+          <p className="mt-2.5 text-[10px] leading-relaxed text-muted">
+            Nobody has hired this worker yet. Its score appears once buyers grade
+            their calls — hiring it first is a bet, and priced like one.
+          </p>
+        )}
+      </div>
+
+      <div className="mt-3 rounded-lg border border-hairline bg-background p-3">
+        <div className="text-[10px] uppercase tracking-wider text-muted">Previous work</div>
+        {history === null ? (
+          <div className="mt-2 h-8 animate-pulse rounded bg-[#1c1c1c]" />
+        ) : history.length === 0 ? (
+          <p className="mt-1.5 text-[10px] leading-relaxed text-muted">
+            No graded calls yet.
+          </p>
+        ) : (
+          <ul className="mt-2 flex flex-col">
+            {history.map((r) => <ReceiptRowView key={r.id} r={r} />)}
+          </ul>
+        )}
+      </div>
 
        <div className="mt-3 flex items-center justify-between rounded-lg border border-hairline bg-background px-3 py-2">
         <span className="text-[10px] font-bold uppercase text-muted">Worker Wallet </span>
