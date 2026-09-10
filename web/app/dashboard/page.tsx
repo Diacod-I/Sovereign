@@ -38,6 +38,25 @@ const INITIAL_AGENTS = [
 
 const INITIAL_ALLOWLIST: { id: string; listingId: string; name: string; address: string; cap: number }[] = [];
 
+type BuyerAgent = (typeof INITIAL_AGENTS)[number];
+type AllowEntry = (typeof INITIAL_ALLOWLIST)[number];
+
+// ADD 4 — buyer spend policy. Governs every "Hire & pay" before the transfer signs.
+type PolicyVerdict =
+  | { ok: true; needsApproval: boolean }
+  | { ok: false; reason: string };
+
+function checkPolicy(agent: BuyerAgent, priceUsdc: number, payTo: string, allowlist: AllowEntry[]): PolicyVerdict {
+  if (agent.status !== 'active') return { ok: false, reason: `${agent.name} is paused — resume it to spend.` };
+  const entry = allowlist.find((w) => w.address.toLowerCase() === payTo.toLowerCase());
+  if (!entry) return { ok: false, reason: 'This worker is not on your allowlist. Add it first.' };
+  if (entry.cap && priceUsdc > entry.cap) return { ok: false, reason: `Over this worker's per-call cap ($${entry.cap}).` };
+  if (priceUsdc > agent.perAction) return { ok: false, reason: `Over ${agent.name}'s per-action limit ($${agent.perAction}).` };
+  if (agent.spentToday + priceUsdc > agent.dailyBudget)
+    return { ok: false, reason: `Over ${agent.name}'s daily budget ($${agent.spentToday} of $${agent.dailyBudget} spent).` };
+  return { ok: true, needsApproval: priceUsdc >= agent.approvalThreshold };
+}
+
 type Listing = {
   id: string;
   name: string;
@@ -165,8 +184,13 @@ export default function Dashboard() {
   const [orgReady, setOrgReady] = useState(false);
   const [tab, setTab] = useState<Tab>('overview');
 
-  const [agents, setAgents] = useState(INITIAL_AGENTS);
-  const [allowlist, setAllowlist] = useState(INITIAL_ALLOWLIST);
+  const [agents, setAgents] = useState<BuyerAgent[]>(INITIAL_AGENTS);
+  const [allowlist, setAllowlist] = useState<AllowEntry[]>(INITIAL_ALLOWLIST);
+  const [policyReady, setPolicyReady] = useState(false);
+
+  // marketplace "Hire & pay" (ADD 2) + spend-policy enforcement (ADD 4)
+  const [hireId, setHireId] = useState<string | null>(null);
+  const [editAgentId, setEditAgentId] = useState<string | null>(null);
 
   // ---- live wallet (Privy embedded wallet, on Arc) ----
   const walletAddress = user?.wallet?.address ?? null;
@@ -206,9 +230,23 @@ export default function Dashboard() {
     try {
       const s = localStorage.getItem('sovereign_org');
       if (s) setOrg(s);
+      const a = localStorage.getItem('sovereign_agents');
+      if (a) setAgents(JSON.parse(a));
+      const w = localStorage.getItem('sovereign_allowlist');
+      if (w) setAllowlist(JSON.parse(w));
     } catch {}
     setOrgReady(true);
+    setPolicyReady(true);
   }, []);
+
+  // Persist buyer policy + allowlist locally so limits survive a reload (ADD 4).
+  useEffect(() => {
+    if (!policyReady) return;
+    try {
+      localStorage.setItem('sovereign_agents', JSON.stringify(agents));
+      localStorage.setItem('sovereign_allowlist', JSON.stringify(allowlist));
+    } catch {}
+  }, [agents, allowlist, policyReady]);
 
   useEffect(() => {
     let alive = true;
@@ -293,6 +331,24 @@ export default function Dashboard() {
     reloadWallet();
     return hash;
   };
+
+  // ADD 2 — real buyer→seller settlement: a native USDC value transfer on Arc, same
+  // signing path as withdraw. 18-dp here (native value), not the 6-dp on-chain price
+  // field. The HirePayModal enforces the spend policy (ADD 4) before this runs; on
+  // success we roll the paying agent's spentToday forward.
+  const payWorker = async (l: Listing, agentId: string): Promise<string> => {
+    if (!walletAddress) throw new Error('No wallet');
+    const base = parseUnits(l.price || '0', 18);
+    const { hash } = await sendTransaction(
+      { to: l.payTo, value: '0x' + base.toString(16), chainId: ARC_CHAIN_ID },
+      { address: walletAddress }
+    );
+    setAgents((list) => list.map((a) => (a.id === agentId ? { ...a, spentToday: +(a.spentToday + Number(l.price || 0)).toFixed(6) } : a)));
+    reloadWallet();
+    return hash;
+  };
+  const hireListing = market.find((l) => l.id === hireId) || null;
+  const editAgent = agents.find((a) => a.id === editAgentId) || null;
 
   const NAV: { id: Tab; label: string }[] = [
     { id: 'overview', label: 'Overview' },
@@ -395,7 +451,10 @@ export default function Dashboard() {
                       <div className="text-[10px] uppercase tracking-wider text-muted">Connect this agent to Claude</div>
                       <Copyable value={`claude mcp add sovereign --transport http https://mcp.sovereign.sh -H "x-agent-token: sk_${a.id}"`} className="mt-1 break-all font-mono text-[11px] text-muted hover:text-foreground">claude mcp add sovereign … sk_{a.id}</Copyable>
                     </div>
-                    <button onClick={() => toggleAgent(a.id)} className="mt-3 w-full rounded-lg border border-hairline px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground">{a.status === 'active' ? 'Pause agent' : 'Resume agent'}</button>
+                    <div className="mt-3 flex gap-2">
+                      <button onClick={() => setEditAgentId(a.id)} className="flex-1 rounded-lg border border-hairline px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground">Edit limits</button>
+                      <button onClick={() => toggleAgent(a.id)} className="flex-1 rounded-lg border border-hairline px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground">{a.status === 'active' ? 'Pause agent' : 'Resume agent'}</button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -473,15 +532,18 @@ export default function Dashboard() {
                         ))}
                       </div>
                     )}
-                    <div className="mt-4 flex items-center justify-between">
+                    <div className="mt-4 flex items-center justify-between gap-2">
                       <span className="font-mono text-sm">{l.price}<span className="text-muted"> USDC/call</span></span>
-                      <button
-                        onClick={() => addToAllowlist(l)}
-                        disabled={isAllowlisted(l.id)}
-                        className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${isAllowlisted(l.id) ? 'cursor-default border border-accent text-accent opacity-70' : 'bg-accent text-black hover:opacity-90'}`}
-                      >
-                        {isAllowlisted(l.id) ? 'On allowlist ✓' : 'Add to allowlist'}
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => addToAllowlist(l)}
+                          disabled={isAllowlisted(l.id)}
+                          className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${isAllowlisted(l.id) ? 'cursor-default border border-accent text-accent opacity-70' : 'border border-hairline text-muted hover:text-foreground'}`}
+                        >
+                          {isAllowlisted(l.id) ? 'Allowlisted ✓' : 'Add to allowlist'}
+                        </button>
+                        <button onClick={() => setHireId(l.id)} className="rounded-lg bg-accent px-3 py-1.5 text-sm text-black transition-opacity hover:opacity-90">Hire &amp; pay</button>
+                      </div>
                     </div>
                     </div>
                   </div>
@@ -546,9 +608,15 @@ export default function Dashboard() {
               <button
                 onClick={() => addToAllowlist(openListing)}
                 disabled={isAllowlisted(openListing.id)}
-                className={`flex-1 rounded-lg px-4 py-2.5 text-sm font-medium transition-colors ${isAllowlisted(openListing.id) ? 'cursor-default border border-accent text-accent opacity-70' : 'bg-accent text-black hover:opacity-90'}`}
+                className={`flex-1 rounded-lg px-4 py-2.5 text-sm font-medium transition-colors ${isAllowlisted(openListing.id) ? 'cursor-default border border-accent text-accent opacity-70' : 'border border-hairline text-muted hover:text-foreground'}`}
               >
-                {isAllowlisted(openListing.id) ? 'On allowlist ✓' : 'Add to allowlist'}
+                {isAllowlisted(openListing.id) ? 'Allowlisted ✓' : 'Add to allowlist'}
+              </button>
+              <button
+                onClick={() => { const id = openListing.id; setOpenId(null); setHireId(id); }}
+                className="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90"
+              >
+                Hire &amp; pay
               </button>
             </div>
           </div>
@@ -594,6 +662,20 @@ export default function Dashboard() {
       {/* Withdraw modal */}
       {showWithdraw && (
         <WithdrawModal address={walletAddress} balance={balance} onWithdraw={withdraw} onClose={() => setShowWithdraw(false)} />
+      )}
+
+      {/* Hire & pay a worker (ADD 2) — gated by the buyer spend policy (ADD 4) */}
+      {hireListing && (
+        <HirePayModal listing={hireListing} agents={agents} allowlist={allowlist} onPay={payWorker} onClose={() => setHireId(null)} />
+      )}
+
+      {/* Edit a buyer agent's spend limits (ADD 4) */}
+      {editAgent && (
+        <EditAgentModal
+          agent={editAgent}
+          onSave={(patch) => setAgents((list) => list.map((a) => (a.id === editAgent.id ? { ...a, ...patch } : a)))}
+          onClose={() => setEditAgentId(null)}
+        />
       )}
     </div>
   );

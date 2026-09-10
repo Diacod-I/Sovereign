@@ -8,7 +8,8 @@ import Copyable from '../components/Copyable';
 import Cover from '../components/Cover';
 import Avatar from '../components/Avatar';
 import { useWalletData, useWithdraw, BalanceCard, ActivityFeed, DepositModal, WithdrawModal } from '../components/wallet';
-import { buildBalanceSeries, fetchAgentsByOwner, fetchReceived, formatUsdc, type RangeKey, type RegistryAgent } from '../lib/arc';
+import { buildBalanceSeries, fetchAgentsByOwner, fetchReceived, formatUsdc, txUrl, type RangeKey, type RegistryAgent } from '../lib/arc';
+import { useRegistry, type ListingInput } from '../lib/registry';
 
 type Tab = 'overview' | 'agents' | 'profile';
 type Agent = RegistryAgent;
@@ -47,6 +48,12 @@ export default function SellerDashboard() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(true);
   const [agentsError, setAgentsError] = useState<string | null>(null);
+  const [agentsNonce, setAgentsNonce] = useState(0); // bump to refetch from the subgraph
+
+  // on-chain listing tx state (register / update / setActive)
+  const [txPending, setTxPending] = useState<string | null>(null); // human label of the in-flight tx
+  const [txError, setTxError] = useState<string | null>(null);
+  const [txNote, setTxNote] = useState<{ msg: string; hash: string } | null>(null);
 
   // top earner (most USDC received at a worker's payout address)
   const [topEarner, setTopEarner] = useState<{ name: string; amount: number } | null>(null);
@@ -67,6 +74,7 @@ export default function SellerDashboard() {
   const walletAddress = user?.wallet?.address ?? null;
   const wallet = useWalletData(walletAddress);
   const withdraw = useWithdraw(walletAddress, wallet.reload);
+  const registry = useRegistry(walletAddress);
   const [range, setRange] = useState<RangeKey>('1w');
   const [showDeposit, setShowDeposit] = useState(false);
   const [showWithdraw, setShowWithdraw] = useState(false);
@@ -98,7 +106,14 @@ export default function SellerDashboard() {
       .then((rows) => { if (alive) { setAgents(rows); setAgentsLoading(false); } })
       .catch(() => { if (alive) { setAgentsError('Could not reach the subgraph.'); setAgentsLoading(false); } });
     return () => { alive = false; };
-  }, [walletAddress]);
+  }, [walletAddress, agentsNonce]);
+
+  // The subgraph lags the chain by a few seconds — refetch a couple of times after
+  // a listing tx confirms so "My Workers" catches up to on-chain truth.
+  const reloadAgentsSoon = () => {
+    setTimeout(() => setAgentsNonce((n) => n + 1), 4000);
+    setTimeout(() => setAgentsNonce((n) => n + 1), 9000);
+  };
 
   const activeCount = agents.filter((a) => a.active).length;
 
@@ -129,18 +144,74 @@ export default function SellerDashboard() {
     return <SellerOnboarding user={user} logout={logout} onDone={(name) => { try { localStorage.setItem('sovereign_seller', name); } catch {} setSeller(name); }} />;
   }
 
-  const createAgent = () => {
-    if (!f.name.trim() || !f.price.trim()) return;
-    setAgents((list) => [
-      { id: 'sa_' + Date.now(), name: f.name.trim(), description: f.desc.trim(), tags: f.tags.trim(), price: f.price.trim(), endpoint: f.endpoint.trim() || '—', payTo: f.payTo.trim() || (user?.wallet?.address ?? '0x0000000000000000000000000000000000000000'), owner: (walletAddress ?? '').toLowerCase(), active: true },
-      ...list,
-    ]);
-    setF({ name: '', desc: '', tags: '', price: '', endpoint: '', payTo: '', cover: '' });
-    setShowNew(false);
-    setTab('agents');
+  const fToInput = (): ListingInput => ({
+    name: f.name.trim(),
+    description: f.desc.trim(),
+    tags: f.tags.trim(),
+    price: f.price.trim(),
+    endpoint: f.endpoint.trim() || '—',
+    payTo: f.payTo.trim() || walletAddress || '',
+  });
+
+  // ADD 1 — real on-chain register(): sign an AgentRegistry tx with the embedded
+  // wallet, optimistically show the row, then reconcile from the subgraph.
+  const createAgent = async () => {
+    const input = fToInput();
+    if (!input.name || !input.price || txPending) return;
+    setTxError(null); setTxNote(null); setTxPending('Registering agent on-chain…');
+    try {
+      const { hash, id } = await registry.register(input);
+      setAgents((list) => [
+        { id, name: input.name, description: input.description, tags: input.tags, price: input.price, endpoint: input.endpoint, payTo: input.payTo || (walletAddress ?? ''), owner: (walletAddress ?? '').toLowerCase(), active: true },
+        ...list.filter((a) => a.id !== id),
+      ]);
+      setTxNote({ msg: `Listed “${input.name}” on-chain`, hash });
+      setF({ name: '', desc: '', tags: '', price: '', endpoint: '', payTo: '', cover: '' });
+      setShowNew(false);
+      setTab('agents');
+      reloadAgentsSoon();
+    } catch (e: any) {
+      setTxError(e?.message ? String(e.message) : 'Transaction failed or was rejected.');
+    } finally {
+      setTxPending(null);
+    }
   };
-  const toggle = (id: string) => setAgents((list) => list.map((a) => (a.id === id ? { ...a, active: !a.active } : a)));
-  const updateAgent = (id: string, patch: Partial<Agent>) => setAgents((list) => list.map((a) => (a.id === id ? { ...a, ...patch } : a)));
+
+  // ADD 1 — setActive(): deactivate / reactivate a listing on-chain.
+  const toggle = async (id: string) => {
+    const a = agents.find((x) => x.id === id);
+    if (!a || txPending) return;
+    const next = !a.active;
+    setTxError(null); setTxNote(null); setTxPending(`${next ? 'Reactivating' : 'Deactivating'} “${a.name}”…`);
+    try {
+      const hash = await registry.setActive(id, next);
+      setAgents((list) => list.map((x) => (x.id === id ? { ...x, active: next } : x)));
+      setTxNote({ msg: `${next ? 'Reactivated' : 'Deactivated'} “${a.name}”`, hash });
+      reloadAgentsSoon();
+    } catch (e: any) {
+      setTxError(e?.message ? String(e.message) : 'Transaction failed or was rejected.');
+    } finally {
+      setTxPending(null);
+    }
+  };
+
+  // ADD 1 — update(): push edited public details on-chain. Rejects propagate so the
+  // edit modal can stay open.
+  const updateAgent = async (id: string, input: ListingInput): Promise<void> => {
+    if (txPending) return;
+    setTxError(null); setTxNote(null); setTxPending(`Updating “${input.name}”…`);
+    try {
+      const hash = await registry.update(id, input);
+      setAgents((list) => list.map((a) => (a.id === id ? { ...a, name: input.name, description: input.description, tags: input.tags, price: input.price, endpoint: input.endpoint, payTo: input.payTo || a.payTo } : a)));
+      setTxNote({ msg: `Updated “${input.name}” on-chain`, hash });
+      reloadAgentsSoon();
+    } catch (e: any) {
+      setTxError(e?.message ? String(e.message) : 'Transaction failed or was rejected.');
+      throw e;
+    } finally {
+      setTxPending(null);
+    }
+  };
   const editing = agents.find((a) => a.id === editId) || null;
 
   const saveProfile = () => {
@@ -230,6 +301,23 @@ export default function SellerDashboard() {
                 </div>
                 <button onClick={() => setShowNew(true)} className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-black transition-opacity hover:opacity-90">List new agent</button>
               </div>
+
+              {txPending && (
+                <div className="mt-4 flex items-center gap-2 rounded-lg border border-hairline bg-panel px-3 py-2 text-sm text-muted">
+                  <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+                  {txPending} confirm in your wallet.
+                </div>
+              )}
+              {!txPending && txNote && (
+                <div className="mt-4 flex items-center justify-between gap-2 rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 text-sm text-accent">
+                  <span className="flex items-center gap-2"><span className="inline-block h-1.5 w-1.5 rounded-full bg-accent" />{txNote.msg} — indexing…</span>
+                  <a href={txUrl(txNote.hash)} target="_blank" rel="noreferrer" className="font-mono text-xs underline-offset-2 hover:underline">Arcscan ↗</a>
+                </div>
+              )}
+              {!txPending && txError && (
+                <div className="mt-4 rounded-lg border border-red-400/30 bg-red-400/5 px-3 py-2 text-sm text-red-400">{txError}</div>
+              )}
+
               {agentsLoading ? (
                 <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-muted">Loading your agents from the subgraph…</div>
               ) : agentsError ? (
@@ -266,8 +354,8 @@ export default function SellerDashboard() {
                           </div>
                           <div className="mt-2 break-all font-mono text-[11px] text-muted">{a.endpoint}</div>
                           <div className="mt-4 flex gap-2">
-                            <button onClick={() => setEditId(a.id)} className="flex-1 rounded-lg border border-hairline px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground">Edit</button>
-                            <button onClick={() => toggle(a.id)} className="flex-1 rounded-lg border border-hairline px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground">
+                            <button disabled={!!txPending} onClick={() => setEditId(a.id)} className="flex-1 rounded-lg border border-hairline px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40">Edit</button>
+                            <button disabled={!!txPending} onClick={() => toggle(a.id)} className="flex-1 rounded-lg border border-hairline px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40">
                               {a.active ? 'Deactivate' : 'Reactivate'}
                             </button>
                           </div>
@@ -351,8 +439,11 @@ export default function SellerDashboard() {
               <label className="text-sm"><span className="text-muted">Endpoint URL (x402-gated)</span>
                 <input value={f.endpoint} onChange={(e) => setF({ ...f, endpoint: e.target.value })} placeholder="https://…" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" /></label>
             </div>
+            {txError && <div className="mt-4 rounded-lg border border-red-400/30 bg-red-400/5 px-3 py-2 text-[11px] text-red-400">{txError}</div>}
             <div className="mt-5 flex gap-3">
-              <button onClick={createAgent} className="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black">List agent</button>
+              <button disabled={!f.name.trim() || !f.price.trim() || !!txPending} onClick={createAgent} className="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40">
+                {txPending ? 'Confirm in wallet…' : 'List agent'}
+              </button>
               <button onClick={() => setShowNew(false)} className="rounded-lg border border-hairline px-4 py-2.5 text-sm text-muted hover:text-foreground">Cancel</button>
             </div>
           </div>
@@ -366,32 +457,42 @@ export default function SellerDashboard() {
         <WithdrawModal address={walletAddress} balance={wallet.balance} onWithdraw={withdraw} onClose={() => setShowWithdraw(false)} />
       )}
       {editing && (
-        <EditWorkerModal agent={editing} onSave={(patch) => updateAgent(editing.id, patch)} onClose={() => setEditId(null)} />
+        <EditWorkerModal agent={editing} onSave={(input) => updateAgent(editing.id, input)} onClose={() => setEditId(null)} />
       )}
     </div>
   );
 }
 
-// Edit an existing worker's public details.
-function EditWorkerModal({ agent, onSave, onClose }: { agent: Agent; onSave: (patch: Partial<Agent>) => void; onClose: () => void }) {
+// Edit an existing worker's public details — saving fires an on-chain update() tx.
+function EditWorkerModal({ agent, onSave, onClose }: { agent: Agent; onSave: (input: ListingInput) => Promise<void>; onClose: () => void }) {
   const [name, setName] = useState(agent.name);
   const [price, setPrice] = useState(agent.price);
   const [endpoint, setEndpoint] = useState(agent.endpoint);
   const [payTo, setPayTo] = useState(agent.payTo);
   const [description, setDescription] = useState(agent.description);
   const [tags, setTags] = useState(agent.tags);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
-  const save = () => {
-    if (!name.trim() || !price.trim()) return;
-    onSave({
-      name: name.trim(),
-      price: price.trim(),
-      endpoint: endpoint.trim() || '—',
-      payTo: payTo.trim() || agent.payTo,
-      description: description.trim(),
-      tags: tags.trim(),
-    });
-    onClose();
+  const save = async () => {
+    if (!name.trim() || !price.trim() || busy) return;
+    setErr(null);
+    setBusy(true);
+    try {
+      await onSave({
+        name: name.trim(),
+        price: price.trim(),
+        endpoint: endpoint.trim() || '—',
+        payTo: payTo.trim() || agent.payTo,
+        description: description.trim(),
+        tags: tags.trim(),
+      });
+      onClose();
+    } catch (e: any) {
+      setErr(e?.message ? String(e.message) : 'Transaction failed or was rejected.');
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -418,8 +519,9 @@ function EditWorkerModal({ agent, onSave, onClose }: { agent: Agent; onSave: (pa
           <label className="text-sm"><span className="text-muted">Endpoint URL (x402-gated)</span>
             <input value={endpoint} onChange={(e) => setEndpoint(e.target.value)} placeholder="https://…" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" /></label>
         </div>
+        {err && <div className="mt-4 rounded-lg border border-red-400/30 bg-red-400/5 px-3 py-2 text-[11px] text-red-400">{err}</div>}
         <div className="mt-5 flex gap-3">
-          <button disabled={!name.trim() || !price.trim()} onClick={save} className="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40">Save changes</button>
+          <button disabled={!name.trim() || !price.trim() || busy} onClick={save} className="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40">{busy ? 'Confirm in wallet…' : 'Save changes'}</button>
           <button onClick={onClose} className="rounded-lg border border-hairline px-4 py-2.5 text-sm text-muted hover:text-foreground">Cancel</button>
         </div>
       </div>
