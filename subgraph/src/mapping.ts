@@ -4,7 +4,9 @@ import {
   AgentActivated,
   AgentDeactivated,
 } from "../generated/AgentRegistry/AgentRegistry";
-import { Agent } from "../generated/schema";
+import { BigInt } from "@graphprotocol/graph-ts";
+import { ReceiptFiled } from "../generated/Receipts/Receipts";
+import { Agent, AgentBuyer, Receipt } from "../generated/schema";
 
 export function handleAgentRegistered(e: AgentRegistered): void {
   let a = new Agent(e.params.id);
@@ -18,6 +20,14 @@ export function handleAgentRegistered(e: AgentRegistered): void {
   a.active = true;
   a.createdAt = e.block.timestamp;
   a.updatedAt = e.block.timestamp;
+  // Track record starts empty — every worker begins unproven.
+  a.receiptCount = 0;
+  a.deliveredCount = 0;
+  a.metScore = 0;
+  a.totalPaid = BigInt.zero();
+  a.latencyTotalMs = BigInt.zero();
+  a.distinctBuyers = 0;
+  a.repeatBuyers = 0;
   a.save();
 }
 
@@ -48,4 +58,63 @@ export function handleAgentDeactivated(e: AgentDeactivated): void {
   a.active = false;
   a.updatedAt = e.block.timestamp;
   a.save();
+}
+
+/**
+ * A paid call, graded by the buyer against the expectation they stated first.
+ *
+ * Aggregates roll forward onto the Agent so a profile is one read. A receipt for
+ * an agent this subgraph has never seen is dropped rather than creating a stub —
+ * a score attached to no listing would be unreadable in the UI and is more
+ * likely a bad agentId than a real call.
+ */
+export function handleReceiptFiled(e: ReceiptFiled): void {
+  let agentId = e.params.agentId;
+  let agent = Agent.load(agentId);
+  if (agent == null) return;
+
+  let r = new Receipt(e.params.receiptId.toString());
+  r.agent = agentId;
+  r.agentId = agentId;
+  r.buyer = e.params.buyer;
+  r.settlementRef = e.params.settlementRef;
+  r.amount = e.params.amount;
+  r.latencyMs = e.params.latencyMs.toI32();
+  r.delivered = e.params.delivered;
+  r.met = e.params.met;
+  r.expectation = e.params.expectation;
+  r.note = e.params.note;
+  r.at = e.params.at;
+  r.block = e.block.number;
+  r.tx = e.transaction.hash;
+  r.save();
+
+  agent.receiptCount = agent.receiptCount + 1;
+  if (e.params.delivered) agent.deliveredCount = agent.deliveredCount + 1;
+  agent.metScore = agent.metScore + e.params.met;
+  agent.totalPaid = agent.totalPaid.plus(e.params.amount);
+  agent.latencyTotalMs = agent.latencyTotalMs.plus(
+    BigInt.fromI32(e.params.latencyMs.toI32())
+  );
+  agent.lastHiredAt = e.params.at;
+
+  // Distinct vs repeat buyers. A second call from the same buyer is what
+  // separates "someone tried it once" from "someone relies on it".
+  let key = agentId + "-" + e.params.buyer.toHexString();
+  let ab = AgentBuyer.load(key);
+  if (ab == null) {
+    ab = new AgentBuyer(key);
+    ab.agent = agentId;
+    ab.buyer = e.params.buyer;
+    ab.calls = 0;
+    ab.firstAt = e.params.at;
+    agent.distinctBuyers = agent.distinctBuyers + 1;
+  }
+  ab.calls = ab.calls + 1;
+  ab.lastAt = e.params.at;
+  ab.save();
+
+  if (ab.calls == 2) agent.repeatBuyers = agent.repeatBuyers + 1;
+
+  agent.save();
 }

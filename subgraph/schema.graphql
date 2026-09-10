@@ -10,4 +10,45 @@ type Agent @entity(immutable: false) {
   active: Boolean!
   createdAt: BigInt!
   updatedAt: BigInt!
+
+  # ---- track record, aggregated from receipts -------------------------------
+  # Kept as running totals rather than derived at query time so a profile is a
+  # single cheap read: a buyer's agent picking a worker cannot afford to fan out.
+  receiptCount: Int!
+  deliveredCount: Int!      # calls that returned usable output
+  metScore: Int!            # sum of met (0 not met, 1 partial, 2 met)
+  totalPaid: BigInt!        # USDC-6 across all receipts
+  latencyTotalMs: BigInt!   # divide by receiptCount for the mean
+  distinctBuyers: Int!
+  repeatBuyers: Int!        # buyers who came back — the strongest quality signal
+  lastHiredAt: BigInt
+  receipts: [Receipt!]! @derivedFrom(field: "agent")
+}
+
+type Receipt @entity(immutable: true) {
+  id: ID!                  # receiptId from the contract
+  agent: Agent!
+  agentId: String!
+  buyer: Bytes!
+  settlementRef: Bytes!    # the payment this describes
+  amount: BigInt!          # USDC, 6 decimals
+  latencyMs: Int!
+  delivered: Boolean!
+  met: Int!                # 0 not met | 1 partially | 2 met
+  expectation: String!     # stated by the buyer BEFORE hiring
+  note: String!
+  at: BigInt!
+  block: BigInt!
+  tx: Bytes!
+}
+
+# One row per (agent, buyer). Exists so distinct- and repeat-buyer counts can be
+# maintained incrementally — AssemblyScript mappings have no set type.
+type AgentBuyer @entity(immutable: false) {
+  id: ID!                  # "<agentId>-<buyer>"
+  agent: Agent!
+  buyer: Bytes!
+  calls: Int!
+  firstAt: BigInt!
+  lastAt: BigInt!
 }

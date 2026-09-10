@@ -422,6 +422,9 @@ export default function Dashboard() {
   const [hireId, setHireId] = useState<string | null>(null);
   // Listing awaiting an allowlist-scope choice (which agents may hire it).
   const [allowFor, setAllowFor] = useState<Listing | null>(null);
+  // Paid calls the buyer has not graded yet.
+  const [pending, setPending] = useState<PendingReview[]>([]);
+  const [reviewing, setReviewing] = useState<PendingReview | null>(null);
   const [editAgentId, setEditAgentId] = useState<string | null>(null);
 
   // ---- live wallet (Privy embedded wallet, on Arc) ----
@@ -429,6 +432,9 @@ export default function Dashboard() {
   // field is the MetaMask account, which `useSendTransaction` cannot sign with.
   const embedded = useEmbeddedWallet();
   const walletAddress = embedded.address;
+  // Must sit with the other hooks: everything below the `if (!ready) return null`
+  // guard runs conditionally, and a hook there breaks the hook order.
+  const fileReceipt = useFileReceipt(embedded.address);
   const [balance, setBalance] = useState<number | null>(null);
   const [txs, setTxs] = useState<ArcTx[]>([]);
   const [history, setHistory] = useState<BalancePoint[]>([]);
@@ -445,6 +451,7 @@ export default function Dashboard() {
   const [market, setMarket] = useState<Listing[]>([]);
   const [marketLoading, setMarketLoading] = useState(true);
   const [marketError, setMarketError] = useState<string | null>(null);
+  const [marketNonce, setMarketNonce] = useState(0);
 
   // marketplace detail modal
   const [openId, setOpenId] = useState<string | null>(null);
@@ -469,6 +476,7 @@ export default function Dashboard() {
       if (a) setAgents(rollDaily(JSON.parse(a)));
       const w = localStorage.getItem('sovereign_allowlist');
       if (w) setAllowlist(JSON.parse(w));
+      setPending(readPending());
     } catch {}
     setOrgReady(true);
     setPolicyReady(true);
@@ -491,7 +499,7 @@ export default function Dashboard() {
       .then((rows) => { if (alive) { setMarket(rows); setMarketLoading(false); } })
       .catch(() => { if (alive) { setMarketError('Could not reach the subgraph.'); setMarketLoading(false); } });
     return () => { alive = false; };
-  }, []);
+  }, [marketNonce]);
 
   // Live balance + transaction history for the embedded wallet (drives the
   // Overview chart and the activity feed from one fetch). Refetched on demand
@@ -603,13 +611,25 @@ export default function Dashboard() {
   // signing path as withdraw. 18-dp here (native value).
   // The HirePayModal enforces the spend policy before this runs. On
   // success we roll the paying agent's spentToday forward.
-  const payWorker = async (l: Listing, agentId: string): Promise<string> => {
+  const payWorker = async (l: Listing, agentId: string, expectation = ''): Promise<string> => {
     if (!walletAddress) throw new Error('No wallet');
     const base = parseUnits(l.price || '0', 18);
     const { hash } = await sendTransaction(
       { to: l.payTo, value: '0x' + base.toString(16), chainId: ARC_CHAIN_ID },
       { address: walletAddress }
     );
+    // Park the expectation against the payment tx. The receipt is filed later,
+    // once the work has actually come back, and the contract dedupes on this ref.
+    addPending({
+      settlementRef: hash,
+      agentId: l.id,
+      agentName: l.name,
+      amountUsdc: l.price || '0',
+      expectation,
+      hiredAt: Date.now(),
+      buyerAgentId: agentId,
+    });
+    setPending(readPending());
     setAgents((list) => list.map((a) => (a.id === agentId ? { ...a, spentToday: +(a.spentToday + Number(l.price || 0)).toFixed(6), spentOn: utcDay() } : a)));
     reloadWallet();
     return hash;
@@ -678,6 +698,44 @@ export default function Dashboard() {
                 <Stat label="Active agents" value={String(activeCount)} sub={`${agents.length} total`} />
                 <Stat label="Allowlisted" value={String(allowlist.length)} sub="trusted workers" />
               </div>
+
+              {pending.length > 0 && (
+                <div className="mt-6 rounded-xl border border-amber-400/30 bg-amber-400/5 p-5">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-sm font-medium">Awaiting your review</h2>
+                    <span className="font-mono text-[11px] text-muted">{pending.length}</span>
+                  </div>
+                  <p className="mt-1 text-[11px] leading-relaxed text-muted">
+                    You paid for these. Grading them is what gives the next buyer something to go on.
+                  </p>
+                  <ul className="mt-3 flex flex-col gap-2">
+                    {pending.map((r) => (
+                      <li key={r.settlementRef} className="flex items-center justify-between gap-3 rounded-lg border border-hairline bg-background px-3 py-2">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm">{r.agentName}</div>
+                          <div className="truncate text-[10px] text-muted">
+                            {r.expectation || 'no expectation recorded'} · {relTime(r.hiredAt)}
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <button
+                            onClick={() => { removePending(r.settlementRef); setPending(readPending()); }}
+                            className="text-[11px] text-muted transition-colors hover:text-foreground"
+                          >
+                            Dismiss
+                          </button>
+                          <button
+                            onClick={() => setReviewing(r)}
+                            className="rounded-lg bg-accent px-3 py-1.5 text-[11px] font-medium text-black transition-opacity hover:opacity-90"
+                          >
+                            Rate
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               <BalanceCard series={series} range={range} setRange={setRange} loading={walletLoading} error={walletError} hasWallet={!!walletAddress} onAdd={() => setShowDeposit(true)} />
 
@@ -841,8 +899,11 @@ export default function Dashboard() {
                         <button onClick={() => setSellerId(l.owner)} aria-label="View seller profile" className="shrink-0">
                           <Avatar name={l.owner} />
                         </button>
-                        <div>
-                          <div className="font-medium">{l.name}</div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate font-medium">{l.name}</span>
+                            <ScoreBadge record={l.record} />
+                          </div>
                           <div className="text-xs text-muted">by <button onClick={() => setSellerId(l.owner)} className="font-mono underline underline-offset-2 hover:text-foreground">{short(l.owner)}</button></div>
                         </div>
                       </div>
@@ -1039,6 +1100,30 @@ export default function Dashboard() {
       {hireListing && (
         <HirePayModal listing={hireListing} agents={agents} allowlist={allowlist} onPay={payWorker} onClose={() => setHireId(null)} />
       )}
+      {reviewing && (
+        <ReviewModal
+          review={reviewing}
+          onFile={async (met, delivered, note, latencyMs) => {
+            const hash = await fileReceipt({
+              agentId: reviewing.agentId,
+              settlementRef: reviewing.settlementRef,
+              amountUsdc: reviewing.amountUsdc,
+              latencyMs,
+              delivered,
+              met,
+              expectation: reviewing.expectation,
+              note,
+            });
+            removePending(reviewing.settlementRef);
+            setPending(readPending());
+            // The subgraph needs a few seconds to index the receipt before the
+            // worker's profile reflects it.
+            setTimeout(() => setMarketNonce((n) => n + 1), 5000);
+            return hash;
+          }}
+          onClose={() => setReviewing(null)}
+        />
+      )}
       {allowFor && (
         <AllowlistScopeModal
           listing={allowFor}
@@ -1067,6 +1152,146 @@ export default function Dashboard() {
  * most buyers want; scoping is the deliberate choice. The per-call cap lives here
  * too because it is the other thing you decide at the moment you trust a worker.
  */
+/**
+ * Grades one paid call against the expectation the buyer stated before hiring.
+ *
+ * The expectation is shown read-only at the top: the point is to judge the result
+ * against what was actually asked for, not to rewrite the ask after seeing the
+ * answer. Filing writes a receipt on-chain, which is what the next buyer reads.
+ */
+function ReviewModal({
+  review, onFile, onClose,
+}: {
+  review: PendingReview;
+  onFile: (met: number, delivered: boolean, note: string, latencyMs: number) => Promise<string>;
+  onClose: () => void;
+}) {
+  const [met, setMet] = useState<number | null>(null);
+  const [delivered, setDelivered] = useState(true);
+  const [note, setNote] = useState('');
+  const [latency, setLatency] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [hash, setHash] = useState<string | null>(null);
+
+  const OPTIONS = [
+    { v: 2, label: 'Met', hint: 'Got what I asked for.' },
+    { v: 1, label: 'Partially', hint: 'Useful, but incomplete.' },
+    { v: 0, label: 'Not met', hint: 'Did not answer the ask.' },
+  ];
+
+  const submit = async () => {
+    if (met === null || busy) return;
+    setErr(null);
+    setBusy(true);
+    try {
+      // A worker that produced nothing cannot have met the expectation.
+      const effectiveMet = delivered ? met : 0;
+      setHash(await onFile(effectiveMet, delivered, note.trim(), Number(latency) || 0));
+    } catch (e: any) {
+      setErr(e?.message ? String(e.message) : 'Could not file the receipt.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <ModalShell onClose={onClose}>
+      {hash ? (
+        <>
+          <h2 className="text-lg font-semibold tracking-tight">Review filed</h2>
+          <div className="mt-4 flex items-center gap-2 rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 text-sm text-accent">
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent" />
+            On-chain for {review.agentName}
+          </div>
+          <p className="mt-3 text-[11px] leading-relaxed text-muted">
+            It will appear on this worker&apos;s profile once the subgraph indexes it, a few seconds from now.
+          </p>
+          <a href={txUrl(hash)} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 font-mono text-xs text-muted underline-offset-2 hover:text-foreground hover:underline">
+            View on Arcscan <ArrowUpRight />
+          </a>
+          <button onClick={onClose} className="mt-5 w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black">Done</button>
+        </>
+      ) : (
+        <>
+          <h2 className="text-lg font-semibold tracking-tight">Did it meet expectations?</h2>
+          <p className="mt-1 text-sm text-muted">{review.agentName} · {formatUsdc(Number(review.amountUsdc))} USDC</p>
+
+          <div className="mt-4 rounded-lg border border-hairline bg-background p-3">
+            <div className="text-[10px] uppercase tracking-wider text-muted">You asked for</div>
+            <div className="mt-1 text-[11px] leading-relaxed">
+              {review.expectation || <span className="text-muted">No expectation was recorded at hire time.</span>}
+            </div>
+          </div>
+
+          <div className="mt-4 flex flex-col gap-2">
+            {OPTIONS.map((o) => (
+              <button
+                key={o.v}
+                type="button"
+                onClick={() => setMet(o.v)}
+                className={`flex items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${met === o.v ? 'border-accent bg-accent/5' : 'border-hairline hover:border-muted'}`}
+              >
+                <span className={`mt-0.5 h-3.5 w-3.5 shrink-0 rounded-full border ${met === o.v ? 'border-accent bg-accent' : 'border-hairline'}`} />
+                <span className="text-sm">
+                  {o.label}
+                  <span className="block text-[11px] text-muted">{o.hint}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+
+          <label className="mt-3 flex cursor-pointer items-start gap-2 text-[11px] leading-relaxed text-muted">
+            <input type="checkbox" checked={!delivered} onChange={(e) => setDelivered(!e.target.checked)} className="mt-0.5 accent-[color:var(--accent)]" />
+            <span>It returned nothing usable at all (error, timeout, or empty output).</span>
+          </label>
+
+          <div className="mt-3 grid grid-cols-[1fr_auto] gap-3">
+            <label className="text-sm">
+              <span className="text-muted">Note (optional)</span>
+              <input
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                maxLength={400}
+                placeholder="What was good or missing"
+                className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 text-sm outline-none focus:border-accent"
+              />
+            </label>
+            <label className="text-sm">
+              <span className="text-muted">Took (ms)</span>
+              <input
+                value={latency}
+                onChange={(e) => setLatency(e.target.value)}
+                inputMode="numeric"
+                placeholder="—"
+                className="mt-1 w-24 rounded-lg border border-hairline bg-background px-3 py-2 text-sm outline-none focus:border-accent"
+              />
+            </label>
+          </div>
+
+          {!receiptsConfigured && (
+            <div className="mt-3 rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-[11px] text-amber-400">
+              NEXT_PUBLIC_RECEIPTS_ADDRESS is not set — deploy Receipts.sol and add it before reviews can be filed.
+            </div>
+          )}
+          {err && <div className="mt-3 rounded-lg border border-red-400/30 bg-red-400/5 px-3 py-2 text-[11px] text-red-400">{err}</div>}
+
+          <div className="mt-5 flex gap-3">
+            <button
+              disabled={met === null || busy || !receiptsConfigured}
+              onClick={submit}
+              className="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40"
+            >
+              {busy ? 'Confirm in wallet…' : 'File review on-chain'}
+            </button>
+            <button onClick={onClose} className="rounded-lg border border-hairline px-4 py-2.5 text-sm text-muted hover:text-foreground">Later</button>
+          </div>
+        </>
+      )}
+    </ModalShell>
+  );
+}
+
 function AllowlistScopeModal({
   listing, agents, onConfirm, onClose,
 }: {
@@ -1633,11 +1858,12 @@ function HirePayModal({
   listing: Listing;
   agents: BuyerAgent[];
   allowlist: AllowEntry[];
-  onPay: (l: Listing, agentId: string) => Promise<string>;
+  onPay: (l: Listing, agentId: string, expectation: string) => Promise<string>;
   onClose: () => void;
 }) {
   const price = Number(listing.price || 0);
   const [agentId, setAgentId] = useState(agents.find((a) => a.status === 'active')?.id ?? agents[0]?.id ?? '');
+  const [expectation, setExpectation] = useState('');
   const [approved, setApproved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -1655,7 +1881,8 @@ function HirePayModal({
     setErr(null);
     setBusy(true);
     try {
-      setHash(await onPay(listing, agent.id));
+      const h = await onPay(listing, agent.id, expectation.trim());
+      setHash(h);
     } catch (e: any) {
       setErr(e?.message ? String(e.message) : 'Transaction failed or was rejected.');
     } finally {
@@ -1676,6 +1903,15 @@ function HirePayModal({
           <a href={txUrl(hash)} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 font-mono text-xs text-muted underline-offset-2 hover:text-foreground hover:underline">
             View on Arcscan <ArrowUpRight />
           </a>
+          {expectation.trim() && (
+            <div className="mt-4 rounded-lg border border-hairline bg-background p-3">
+              <div className="text-[10px] uppercase tracking-wider text-muted">You asked for</div>
+              <div className="mt-1 text-[11px] leading-relaxed">{expectation.trim()}</div>
+              <div className="mt-2 text-[10px] leading-relaxed text-muted">
+                Once your agent has the result, grade it under “Awaiting your review” on Overview.
+              </div>
+            </div>
+          )}
           <button onClick={onClose} className="mt-5 w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black">Done</button>
         </>
       ) : (
@@ -1702,6 +1938,24 @@ function HirePayModal({
               per-action ${agent.perAction} · today ${agent.spentToday}/${agent.dailyBudget} · approval over ${agent.approvalThreshold}
             </div>
           )}
+
+          {/* Stated before paying, on purpose: grading against a commitment you
+              wrote down first is what makes "did it meet expectations" a real
+              question rather than a mood. It is stored with the receipt. */}
+          <label className="mt-4 block text-sm">
+            <span className="text-muted">What do you expect back?</span>
+            <textarea
+              value={expectation}
+              onChange={(e) => setExpectation(e.target.value)}
+              rows={2}
+              maxLength={400}
+              placeholder="e.g. a risk score for this address with the sanctions sources it checked"
+              className="mt-1 w-full resize-none rounded-lg border border-hairline bg-background px-3 py-2 text-sm outline-none focus:border-accent"
+            />
+            <span className="mt-1 block text-[10px] text-muted">
+              You&apos;ll grade the result against this. It goes on-chain with your review.
+            </span>
+          </label>
 
           {!verdict.ok && (
             <div className="mt-3 flex items-center gap-2 rounded-lg border border-red-400/30 bg-red-400/5 px-3 py-2 text-[11px] text-red-400">

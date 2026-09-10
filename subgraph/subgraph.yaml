@@ -29,3 +29,27 @@ dataSources:
         - event: AgentDeactivated(string)
           handler: handleAgentDeactivated
       file: ./src/mapping.ts
+
+  # Receipts — what actually happened on each paid call. 
+  - kind: ethereum
+    name: Receipts
+    network: arc-testnet
+    source:
+      address: "0xceC57a89d0333355cB2fE73fcBF7f4729e49D16e"  
+      abi: Receipts
+      startBlock: 61460832
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - Receipt
+        - Agent
+        - AgentBuyer
+      abis:
+        - name: Receipts
+          file: ./abis/Receipts.json
+      eventHandlers:
+        - event: ReceiptFiled(indexed uint256,string,indexed address,bytes32,uint256,uint32,bool,uint8,string,string,uint64)
+          handler: handleReceiptFiled
+      file: ./src/mapping.ts
