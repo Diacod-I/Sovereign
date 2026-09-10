@@ -31,16 +31,75 @@ type Tab = 'overview' | 'agents' | 'marketplace' | 'allowlist';
 
 const short = (a: string) => a.slice(0, 6) + '…' + a.slice(-4);
 
-const INITIAL_AGENTS = [
-  { id: 'ag_1', name: 'Procurement Agent', wallet: '0x9f4c2a77b1e0d5a9c3f2', dailyBudget: 500, perAction: 100, approvalThreshold: 250, allowlist: 6, spentToday: 180, status: 'active' },
-  { id: 'ag_2', name: 'Data Research Agent', wallet: '0x2c88e1730af4b902dd51', dailyBudget: 200, perAction: 25, approvalThreshold: 150, allowlist: 12, spentToday: 47, status: 'active' },
-  { id: 'ag_3', name: 'Ops Bill-Pay Agent', wallet: '0x71d004be55aa20c1e8f3', dailyBudget: 1000, perAction: 400, approvalThreshold: 500, allowlist: 4, spentToday: 0, status: 'paused' },
-];
+// Buyer agents are created by the user — there are no seed agents. Each one is a
+// named spend policy over the buyer's treasury, addressed by a deterministic
+// sub-address derived from the treasury wallet (see deriveAgentWallet).
+export type BuyerAgent = {
+  id: string;
+  name: string;
+  wallet: string;
+  dailyBudget: number;
+  perAction: number;
+  approvalThreshold: number;
+  allowlist: number;
+  spentToday: number;
+  /** UTC day (YYYY-MM-DD) that spentToday counts against. */
+  spentOn?: string;
+  status: string;
+};
 
-const INITIAL_ALLOWLIST: { id: string; listingId: string; name: string; address: string; cap: number }[] = [];
+const INITIAL_AGENTS: BuyerAgent[] = [];
 
-type BuyerAgent = (typeof INITIAL_AGENTS)[number];
-type AllowEntry = (typeof INITIAL_ALLOWLIST)[number];
+type AllowEntry = { id: string; listingId: string; name: string; address: string; cap: number };
+
+const INITIAL_ALLOWLIST: AllowEntry[] = [];
+
+const utcDay = () => new Date().toISOString().slice(0, 10);
+
+/**
+ * The actual command that wires this buyer agent into Claude Code. `sovereign-mcp`
+ * is a published stdio MCP server; SUBGRAPH_URL points it at the live registry and
+ * SOVEREIGN_AGENT_ID scopes discovery + spend to this agent's policy.
+ */
+function mcpAddCommand(a: { id: string }) {
+  return [
+    'claude mcp add sovereign',
+    `--env SUBGRAPH_URL=${SUBGRAPH_URL}`,
+    `--env SOVEREIGN_AGENT_ID=${a.id}`,
+    '-- npx -y sovereign-mcp',
+  ].join(' ');
+}
+
+/**
+ * A stable, checksum-shaped identifier for an agent, derived from the treasury
+ * address + the agent id. It is deterministic (the same agent always shows the
+ * same address across reloads and devices) — unlike the Math.random() hex this
+ * replaces, which produced a different fake address on every create.
+ *
+ * This addresses the agent within the buyer's treasury; settlement is signed by
+ * the treasury wallet under that agent's policy, so it is a label, not a
+ * separately funded EOA.
+ */
+function deriveAgentWallet(treasury: string | null, agentId: string): string {
+  const seed = `${(treasury || '0x').toLowerCase()}:${agentId}`;
+  // FNV-1a over the seed, expanded to 40 hex chars. Cheap, sync, and stable.
+  let h1 = 0x811c9dc5;
+  let out = '';
+  for (let round = 0; round < 5; round++) {
+    for (let i = 0; i < seed.length; i++) {
+      h1 ^= seed.charCodeAt(i) + round;
+      h1 = Math.imul(h1, 0x01000193) >>> 0;
+    }
+    out += h1.toString(16).padStart(8, '0');
+  }
+  return '0x' + out.slice(0, 40);
+}
+
+/** Rolls spentToday back to 0 when the stored day is no longer today (UTC). */
+function rollDaily(list: BuyerAgent[]): BuyerAgent[] {
+  const today = utcDay();
+  return list.map((a) => (a.spentOn === today ? a : { ...a, spentToday: 0, spentOn: today }));
+}
 
 // Buyer spend policy. Governs every "Hire & pay" before the transfer signs.
 type PolicyVerdict =
@@ -235,7 +294,7 @@ export default function Dashboard() {
       const s = localStorage.getItem('sovereign_org');
       if (s) setOrg(s);
       const a = localStorage.getItem('sovereign_agents');
-      if (a) setAgents(JSON.parse(a));
+      if (a) setAgents(rollDaily(JSON.parse(a)));
       const w = localStorage.getItem('sovereign_allowlist');
       if (w) setAllowlist(JSON.parse(w));
     } catch {}
@@ -305,10 +364,21 @@ export default function Dashboard() {
 
   const createAgent = () => {
     if (!nName.trim()) return;
-    const hex = '0x' + Math.random().toString(16).slice(2, 6) + Math.random().toString(16).slice(2, 6) + Math.random().toString(16).slice(2, 6);
+    const id = 'ag_' + Date.now().toString(36);
     setAgents((list) => [
       ...list,
-      { id: 'ag_' + Date.now(), name: nName.trim(), wallet: hex.padEnd(22, '0'), dailyBudget: Number(nBudget) || 0, perAction: Math.round((Number(nBudget) || 0) / 5), approvalThreshold: Number(nThreshold) || 0, allowlist: 0, spentToday: 0, status: 'active' },
+      {
+        id,
+        name: nName.trim(),
+        wallet: deriveAgentWallet(walletAddress, id),
+        dailyBudget: Number(nBudget) || 0,
+        perAction: Math.round((Number(nBudget) || 0) / 5),
+        approvalThreshold: Number(nThreshold) || 0,
+        allowlist: allowlist.length,
+        spentToday: 0,
+        spentOn: utcDay(),
+        status: 'active',
+      },
     ]);
     setNName(''); setNBudget('250'); setNThreshold('100'); setShowNew(false); setTab('agents');
   };
@@ -347,7 +417,7 @@ export default function Dashboard() {
       { to: l.payTo, value: '0x' + base.toString(16), chainId: ARC_CHAIN_ID },
       { address: walletAddress }
     );
-    setAgents((list) => list.map((a) => (a.id === agentId ? { ...a, spentToday: +(a.spentToday + Number(l.price || 0)).toFixed(6) } : a)));
+    setAgents((list) => list.map((a) => (a.id === agentId ? { ...a, spentToday: +(a.spentToday + Number(l.price || 0)).toFixed(6), spentOn: utcDay() } : a)));
     reloadWallet();
     return hash;
   };
@@ -433,6 +503,29 @@ export default function Dashboard() {
               </div>
 
 
+              {agents.length === 0 ? (
+                <div className="mt-6 rounded-xl border border-dashed border-hairline bg-panel p-10 text-center">
+                  <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full border border-hairline">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="text-muted" aria-hidden="true">
+                      <rect x="3" y="8" width="18" height="12" rx="2" />
+                      <path d="M12 8V4" /><circle cx="12" cy="3" r="1" />
+                      <path d="M8.5 13v2M15.5 13v2" />
+                    </svg>
+                  </div>
+                  <h2 className="mt-4 text-base font-medium">No agents yet</h2>
+                  <p className="mx-auto mt-1.5 max-w-sm text-sm leading-relaxed text-muted">
+                    An agent is a spend policy over your treasury — a daily budget, a per-action
+                    limit, and the amount above which a payment waits for your approval. Create one,
+                    then connect it to Claude over MCP.
+                  </p>
+                  <button
+                    onClick={() => setShowNew(true)}
+                    className="mt-5 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-black transition-opacity hover:opacity-90"
+                  >
+                    Create your first agent
+                  </button>
+                </div>
+              ) : (
               <div className="mt-6 grid gap-3 sm:grid-cols-2">
                 {agents.map((a) => (
                   <div key={a.id} className="rounded-xl border border-hairline bg-panel p-5">
@@ -445,15 +538,18 @@ export default function Dashboard() {
                       <div className="text-muted">Daily budget</div><div className="text-right font-mono">${a.dailyBudget}</div>
                       <div className="text-muted">Per action</div><div className="text-right font-mono">${a.perAction}</div>
                       <div className="text-muted">Approval over</div><div className="text-right font-mono">${a.approvalThreshold}</div>
-                      <div className="text-muted">Allowlist</div><div className="text-right font-mono">{a.allowlist}</div>
+                      <div className="text-muted">Allowlist</div><div className="text-right font-mono">{allowlist.length}</div>
                     </div>
                     <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-[#1c1c1c]">
                       <div className="h-full rounded-full bg-accent" style={{ width: `${Math.min(100, (a.spentToday / a.dailyBudget) * 100 || 0)}%` }} />
                     </div>
                     <div className="mt-1 text-[11px] text-muted">${a.spentToday} of ${a.dailyBudget} today</div>
                     <div className="mt-4 rounded-lg border border-hairline bg-background px-3 py-2">
-                      <div className="text-[10px] uppercase tracking-wider text-muted">Connect this agent to Claude</div>
-                      <Copyable value={`claude mcp add sovereign --transport http https://mcp.sovereign.sh -H "x-agent-token: sk_${a.id}"`} className="mt-1 break-all font-mono text-[11px] text-muted hover:text-foreground">claude mcp add sovereign … sk_{a.id}</Copyable>
+                      <div className="text-[10px] uppercase tracking-wider text-muted">Connect this agent to Claude Code</div>
+                      <Copyable value={mcpAddCommand(a)} className="mt-1 break-all font-mono text-[11px] text-muted hover:text-foreground">claude mcp add sovereign -- npx -y sovereign-mcp</Copyable>
+                      <div className="mt-1 text-[10px] leading-relaxed text-muted">
+                        Run it in your project, then ask Claude to search and hire an agent.
+                      </div>
                     </div>
                     <div className="mt-3 flex gap-2">
                       <button onClick={() => setEditAgentId(a.id)} className="flex-1 rounded-lg border border-hairline px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground">Edit limits</button>
@@ -462,6 +558,7 @@ export default function Dashboard() {
                   </div>
                 ))}
               </div>
+              )}
             </>
           )}
 
