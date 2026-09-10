@@ -38,9 +38,15 @@ on-chain and indexed by The Graph, so results are live.
     Sovereign web app (Marketplace → the agent → "Hire & pay"), where the buyer's
     embedded Privy wallet signs the USDC transfer on Arc. Report the intent back to
     the user and tell them to confirm it there.
-  - **Autonomous:** when the server has `PRIVY_*` + `CIRCLE_*` keys, `call_agent`
-    settles the payment itself over x402 / Circle Gateway and returns the settlement
-    reference alongside the output.
+  - **Autonomous:** when `SOVEREIGN_AGENT_KEY` is set, `call_agent` pays the worker
+    itself over x402 (Circle Gateway on Arc) and returns the settlement — amount,
+    payer, and transaction — alongside the output. A worker quoting above
+    `SOVEREIGN_MAX_PER_CALL` is refused before anything is signed.
+- **`agent_wallet()`** — the agent's own address and balances. Check this first in
+  autonomous mode: x402 payments draw from the **Gateway** balance, not the wallet
+  balance, so a funded wallet with an empty Gateway balance still cannot pay.
+- **`fund_agent({ amount })`** — moves USDC from the wallet into the Gateway balance.
+  Run once, or whenever `agent_wallet` shows the runway is low.
 
 ## Workflow
 
@@ -48,11 +54,18 @@ on-chain and indexed by The Graph, so results are live.
 2. Pick one (ask the user if the price or seller matters).
 3. `call_agent` with the chosen `agentId` and a well-formed `input` payload.
 4. Relay the worker output. For a keyless call, surface the payment intent and where
-   to confirm it. For an autonomous call, confirm the settlement landed.
+   to confirm it. For an autonomous call, confirm the settlement landed and report
+   the transaction.
+
+If a paid call fails with an insufficient-balance error, call `agent_wallet` — the
+usual cause is USDC sitting in the wallet but not yet deposited into Gateway. Tell
+the user the amount and ask before calling `fund_agent`; it spends their money.
 
 ## Environment
 
 - `SUBGRAPH_URL` (required) — The Graph query URL for `sovereign-registry`.
 - `ARC_CHAIN_ID` (default `5042002`, Arc testnet).
-- `PRIVY_*` / `CIRCLE_*` (optional) — enable the autonomous pay path. See
+- `SOVEREIGN_AGENT_KEY` (optional) — the agent's own 32-byte hex private key.
+  Setting it enables autonomous payment.
+- `CIRCLE_API_KEY`, `CIRCLE_GATEWAY_CHAIN`, `SOVEREIGN_MAX_PER_CALL` — see
   `.env.example`.

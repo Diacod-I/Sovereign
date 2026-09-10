@@ -5,7 +5,8 @@
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node test/e2e-x402.mjs"
   },
   "keywords": [
     "x402",
@@ -25,5 +26,11 @@
   },
   "engines": {
     "node": ">=18"
-  }
+  },
+  "files": [
+    "server.js",
+    "test",
+    "README.md",
+    ".env.example"
+  ]
 }

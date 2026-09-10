@@ -19,6 +19,25 @@ export const arcTestnet = defineChain({
   testnet: true,
 });
 
+// WalletConnect needs a Reown/WalletConnect Cloud project id. Without one its
+// sign-client cannot open the relay socket, and its pino logger emits an error
+// whose object has no enumerable properties — which Next's dev overlay surfaces
+// as a bare `Console Error {}`. Noise, not a real failure, but it buries real
+// errors, so WalletConnect is only switched on once a project id exists.
+//
+// Injected wallets (MetaMask and friends) do NOT go through WalletConnect, so
+// the MetaMask login path is unaffected either way. Set
+// NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID to re-enable mobile-wallet QR pairing.
+const WC_PROJECT_ID = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || '';
+const WC_ENABLED = WC_PROJECT_ID.length > 0;
+
+// `rainbow` and `wallet_connect` are WalletConnect-powered; listing them while
+// WalletConnect is disabled is exactly the mismatch Privy warns breaks the
+// connector UI, so they are only offered when WalletConnect is actually live.
+const WALLET_LIST = WC_ENABLED
+  ? (['detected_wallets', 'metamask', 'coinbase_wallet', 'rainbow', 'wallet_connect'] as const)
+  : (['detected_wallets', 'metamask', 'coinbase_wallet'] as const);
+
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <PrivyProvider
@@ -36,13 +55,13 @@ export function Providers({ children }: { children: React.ReactNode }) {
         appearance: {
           theme: '#0a0a0a',
           accentColor: '#2FFF00',
-          // Show the injected extension first, then MetaMask by name, then the
-          // WalletConnect fallback for mobile wallets.
-          walletList: ['detected_wallets', 'metamask', 'coinbase_wallet', 'rainbow', 'wallet_connect'],
+          // Detected injected extension first, then MetaMask by name.
+          walletList: [...WALLET_LIST],
         },
         externalWallets: {
-          walletConnect: { enabled: true },
+          walletConnect: { enabled: WC_ENABLED },
         },
+        ...(WC_ENABLED ? { walletConnectCloudProjectId: WC_PROJECT_ID } : {}),
         defaultChain: arcTestnet,
         supportedChains: [arcTestnet],
       }}

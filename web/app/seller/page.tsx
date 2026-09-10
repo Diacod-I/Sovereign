@@ -387,7 +387,7 @@ export default function SellerDashboard() {
                     {worldV ? (
                       <div className="mt-0.5 inline-flex items-center gap-1 text-xs text-accent">
                         <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent" />
-                        World ID verified · unique human · {levelLabel(worldV.level)}
+                        World ID verified · {levelLabel(worldV.level)}
                         {worldV.nullifierHash !== 'demo' && (
                           <span className="font-mono text-muted"> · {shortNullifier(worldV.nullifierHash)}</span>
                         )}

@@ -44,7 +44,8 @@ function startMockGateway() {
           name: 'GatewayWalletBatched',
           version: '1',
           verifyingContract: '0x0077777d7EBA4688BDeF3E311b846F25870A19B9',
-          asset: '0x3600000000000000000000000000000000000000',
+          // The middleware picks the asset out of extra.assets by symbol.
+          assets: [{ symbol: 'USDC', address: '0x3600000000000000000000000000000000000000', decimals: 6 }],
         },
       }],
       extensions: [],
@@ -142,14 +143,20 @@ try {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ input: { address: '0xabc' } }),
   });
-  const unpaidBody = await unpaid.json().catch(() => ({}));
-
   if (unpaid.status !== 402) fail(`unpaid request returned ${unpaid.status}, expected 402`);
   else pass('unpaid POST /task → 402');
 
-  const accepts = unpaidBody.accepts ?? unpaidBody.paymentRequirements ?? [];
+  // Gateway carries the requirements in a base64 PAYMENT-REQUIRED header; the
+  // body is deliberately empty. (Note: the paid retry then comes back in a
+  // `Payment-Signature` header — NOT the `X-PAYMENT` header the old stub read.)
+  const header = unpaid.headers.get('payment-required');
+  let quoted = {};
+  try {
+    quoted = JSON.parse(Buffer.from(header ?? '', 'base64').toString('utf8'));
+  } catch {}
+  const accepts = quoted.accepts ?? [];
   if (!Array.isArray(accepts) || accepts.length === 0) {
-    fail('402 body carried no `accepts` requirements: ' + JSON.stringify(unpaidBody).slice(0, 300));
+    fail('402 carried no `accepts` requirements in PAYMENT-REQUIRED: ' + JSON.stringify(quoted).slice(0, 300));
   } else {
     const req0 = accepts[0];
     pass(`402 quoted ${req0.amount} (atomic) to ${req0.payTo} on ${req0.network}`);
