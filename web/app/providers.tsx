@@ -24,9 +24,25 @@ export function Providers({ children }: { children: React.ReactNode }) {
     <PrivyProvider
       appId={process.env.NEXT_PUBLIC_PRIVY_APP_ID!}
       config={{
-        embeddedWallets: { ethereum: { createOnLogin: 'users-without-wallets' } },
-        loginMethods: ['email', 'wallet'],
-        appearance: { theme: '#0a0a0a', accentColor: '#2FFF00' },
+        // 'all-users' (not 'users-without-wallets') is load-bearing: a MetaMask
+        // login already counts as "has a wallet", so under the old setting those
+        // users got NO embedded wallet and every send path below broke. Sovereign
+        // always signs with the embedded wallet on Arc — MetaMask is identity only.
+        embeddedWallets: {
+          ethereum: { createOnLogin: 'all-users' },
+          showWalletUIs: true,
+        },
+        loginMethods: ['wallet', 'email'],
+        appearance: {
+          theme: '#0a0a0a',
+          accentColor: '#2FFF00',
+          // Show the injected extension first, then MetaMask by name, then the
+          // WalletConnect fallback for mobile wallets.
+          walletList: ['detected_wallets', 'metamask', 'coinbase_wallet', 'rainbow', 'wallet_connect'],
+        },
+        externalWallets: {
+          walletConnect: { enabled: true },
+        },
         defaultChain: arcTestnet,
         supportedChains: [arcTestnet],
       }}

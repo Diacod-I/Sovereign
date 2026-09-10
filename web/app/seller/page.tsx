@@ -11,6 +11,7 @@ import { useWalletData, useWithdraw, BalanceCard, ActivityFeed, DepositModal, Wi
 import { buildBalanceSeries, fetchAgentsByOwner, fetchReceived, formatUsdc, txUrl, type RangeKey, type RegistryAgent } from '../lib/arc';
 import { useRegistry, type ListingInput } from '../lib/registry';
 import WorldVerify from '../components/WorldVerify';
+import { useEmbeddedWallet } from '../lib/useEmbeddedWallet';
 import { readVerification, shortNullifier, levelLabel, type SellerVerification } from '../lib/world';
 
 type Tab = 'overview' | 'agents' | 'profile';
@@ -73,8 +74,10 @@ export default function SellerDashboard() {
   // worker edit modal
   const [editId, setEditId] = useState<string | null>(null);
 
-  // live wallet (same Privy embedded wallet as the buyer view)
-  const walletAddress = user?.wallet?.address ?? null;
+  // live wallet (same Privy embedded wallet as the buyer view). Resolved via
+  // useEmbeddedWallet so a MetaMask login still signs with the embedded wallet.
+  const embedded = useEmbeddedWallet();
+  const walletAddress = embedded.address;
   const wallet = useWalletData(walletAddress);
   const withdraw = useWithdraw(walletAddress, wallet.reload);
   const registry = useRegistry(walletAddress);
@@ -257,8 +260,8 @@ export default function SellerDashboard() {
         </nav>
         <div className="mt-auto border-t border-hairline pt-4">
           <div className="px-3 text-sm font-medium">{seller}</div>
-          {user?.wallet?.address ? (
-            <div className="px-3"><Copyable value={user.wallet.address} className="font-mono text-[11px] text-muted hover:text-foreground">{short(user.wallet.address)}</Copyable></div>
+          {walletAddress ? (
+            <div className="px-3"><Copyable value={walletAddress} className="font-mono text-[11px] text-muted hover:text-foreground">{short(walletAddress)}</Copyable></div>
           ) : (
             <div className="truncate px-3 font-mono text-[11px] text-muted">{user?.email?.address ?? 'account'}</div>
           )}
@@ -397,7 +400,7 @@ export default function SellerDashboard() {
 
                 {!worldV && (
                   <div className="mt-4 max-w-xs">
-                    <WorldVerify wallet={user?.wallet?.address} onVerified={setWorldV} label="Verify with World ID" />
+                    <WorldVerify wallet={walletAddress} onVerified={setWorldV} label="Verify with World ID" />
                   </div>
                 )}
 
@@ -412,8 +415,8 @@ export default function SellerDashboard() {
                   </label>
                   <div className="rounded-lg border border-hairline bg-background px-3 py-2.5 text-sm">
                     <div className="text-[10px] uppercase tracking-wider text-muted">Payout wallet (Arc)</div>
-                    {user?.wallet?.address ? (
-                      <Copyable value={user.wallet.address} className="mt-0.5 break-all font-mono text-xs text-muted hover:text-foreground">{user.wallet.address}</Copyable>
+                    {walletAddress ? (
+                      <Copyable value={walletAddress} className="mt-0.5 break-all font-mono text-xs text-muted hover:text-foreground">{walletAddress}</Copyable>
                     ) : (
                       <div className="mt-0.5 font-mono text-xs text-muted">wallet not ready</div>
                     )}
@@ -549,6 +552,8 @@ function EditWorkerModal({ agent, onSave, onClose }: { agent: Agent; onSave: (in
 function SellerOnboarding({ user, logout, onDone }: { user: any; logout: () => void; onDone: (name: string) => void }) {
   const [name, setName] = useState('');
   const [verified, setVerified] = useState(false);
+  // The payout wallet is the embedded wallet — same one the dashboard signs with.
+  const { address: walletAddress } = useEmbeddedWallet();
   return (
     <div className="flex min-h-screen items-center justify-center px-6">
       <div className="w-full max-w-md rounded-2xl border border-hairline bg-panel p-7">
@@ -565,13 +570,13 @@ function SellerOnboarding({ user, logout, onDone }: { user: any; logout: () => v
               World ID verified ✓
             </div>
           ) : (
-            <WorldVerify wallet={user?.wallet?.address} onVerified={() => setVerified(true)} />
+            <WorldVerify wallet={walletAddress} onVerified={() => setVerified(true)} />
           )}
         </div>
         <div className="mt-3 rounded-lg border border-hairline bg-background px-3 py-2.5 text-sm">
           <div className="text-[11px] uppercase tracking-wider text-muted">Payout wallet</div>
-          {user?.wallet?.address ? (
-            <Copyable value={user.wallet.address} className="mt-0.5 break-all font-mono text-xs hover:text-foreground">{user.wallet.address}</Copyable>
+          {walletAddress ? (
+            <Copyable value={walletAddress} className="mt-0.5 break-all font-mono text-xs hover:text-foreground">{walletAddress}</Copyable>
           ) : (
             <div className="mt-0.5 font-mono text-xs text-muted">created on continue</div>
           )}

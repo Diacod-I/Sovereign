@@ -27,18 +27,29 @@ export default function Home() {
   const [active, setActive] = useState(0);
   const carouselRef = useRef<any>(null);
 
-  const [intent, setIntent] = useState<'buyer' | 'seller'>('buyer');
+  // Where to land AFTER a login the user just started. It stays null on a plain
+  // page load, which is what keeps an already-signed-in visitor on the landing
+  // page instead of being bounced to /dashboard the moment Privy hydrates —
+  // previously that bounce made "Become a seller" impossible to click.
+  const [pending, setPending] = useState<'buyer' | 'seller' | null>(null);
 
   const go = (dest: 'buyer' | 'seller' = 'buyer') => {
-    setIntent(dest);
-    if (authenticated) router.push(dest === 'seller' ? '/seller' : '/dashboard');
-    else login();
+    const href = dest === 'seller' ? '/seller' : '/dashboard';
+    if (authenticated) {
+      router.push(href);
+      return;
+    }
+    setPending(dest);
+    login();
   };
 
-  // On successful login, route by the chosen intent.
+  // Route only once the login the user actually initiated succeeds.
   useEffect(() => {
-    if (ready && authenticated) router.replace(intent === 'seller' ? '/seller' : '/dashboard');
-  }, [ready, authenticated, intent, router]);
+    if (!ready || !authenticated || !pending) return;
+    const href = pending === 'seller' ? '/seller' : '/dashboard';
+    setPending(null);
+    router.replace(href);
+  }, [ready, authenticated, pending, router]);
 
   return (
     <>
