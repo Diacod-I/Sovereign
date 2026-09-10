@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "test:probe": "node test/probe.e2e.mjs",
-    "test:probe:fixture": "node test/probe.fixture.e2e.mjs"
+    "test:probe:fixture": "node test/probe.fixture.e2e.mjs",
+    "test:handoff": "npx esbuild app/lib/receipts.ts --bundle --format=esm --outfile=/tmp/receipts.mjs --log-level=error && node test/handoff.e2e.mjs"
   },
   "dependencies": {
     "@graphprotocol/graph-cli": "^0.98.1",

@@ -164,7 +164,90 @@ export type PendingReview = {
   expectation: string;
   hiredAt: number;
   buyerAgentId: string;
+  /** Measured by the MCP when the agent made the call itself. */
+  latencyMs?: number;
+  delivered?: boolean;
 };
+
+// ---------------------------------------------------------------- handoff links
+// sovereign-mcp encodes the context of a call into a URL so the human confirms
+// what happened rather than retyping it. `?hire=` prefills the payment modal
+// with the expectation the agent stated; `?review=` prefills the grading modal
+// after an autonomous payment has already settled.
+
+export type HireHandoff = {
+  kind: 'hire';
+  agentId: string;
+  agentName: string;
+  amountUsdc: string;
+  expectation: string;
+};
+
+export type ReviewHandoff = {
+  kind: 'review';
+  agentId: string;
+  agentName: string;
+  amountUsdc: string;
+  expectation: string;
+  settlementRef: string;
+  latencyMs: number;
+  delivered: boolean;
+};
+
+export type Handoff = HireHandoff | ReviewHandoff;
+
+function decodeB64Url(raw: string): unknown {
+  const b64 = raw.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
+  // atob yields a *binary* string, one char per byte — it does not decode UTF-8.
+  // Passing it straight to JSON.parse mangles anything non-ASCII, and an
+  // expectation is free text: curly quotes, em dashes and emoji all show up in
+  // practice, and a corrupted one would be written on-chain corrupted. So decode
+  // the bytes explicitly.
+  const bin = atob(padded);
+  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+/**
+ * Reads a handoff out of the URL. Returns null on anything malformed — this is
+ * untrusted input from a link, so it is validated field by field rather than
+ * trusted because it parsed.
+ */
+export function readHandoff(search: string): Handoff | null {
+  try {
+    const params = new URLSearchParams(search);
+    const kind = params.get('review') ? 'review' : params.get('hire') ? 'hire' : null;
+    if (!kind) return null;
+    const raw = params.get(kind);
+    if (!raw) return null;
+    const d = decodeB64Url(raw) as Record<string, unknown>;
+
+    const str = (v: unknown, max = 400) => (typeof v === 'string' ? v.slice(0, max) : '');
+    const agentId = str(d.agentId, 100);
+    if (!agentId) return null;
+
+    const base = {
+      agentId,
+      agentName: str(d.agentName, 120) || agentId,
+      amountUsdc: /^[0-9]*\.?[0-9]+$/.test(String(d.amountUsdc ?? '')) ? String(d.amountUsdc) : '0',
+      expectation: str(d.expectation),
+    };
+
+    if (kind === 'hire') return { kind: 'hire', ...base };
+
+    const ref = str(d.settlementRef, 66);
+    return {
+      kind: 'review',
+      ...base,
+      settlementRef: /^0x[a-fA-F0-9]{64}$/.test(ref) ? ref : '',
+      latencyMs: Number.isFinite(Number(d.latencyMs)) ? Math.max(0, Math.round(Number(d.latencyMs))) : 0,
+      delivered: d.delivered !== false,
+    };
+  } catch {
+    return null;
+  }
+}
 
 const KEY = 'sovereign_pending_reviews';
 

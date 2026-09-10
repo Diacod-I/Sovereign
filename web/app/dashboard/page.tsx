@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePrivy, useSendTransaction } from '@privy-io/react-auth';
 import { parseUnits } from 'viem';
 import { useRouter } from 'next/navigation';
@@ -13,7 +13,7 @@ import Cover from '../components/Cover';
 import { useEmbeddedWallet } from '../lib/useEmbeddedWallet';
 import {
   TRACK_RECORD_FIELDS, addPending, fetchReceipts, readPending, removePending,
-  receiptsConfigured, toTrackRecord, useFileReceipt,
+  readHandoff, receiptsConfigured, toTrackRecord, useFileReceipt,
   type PendingReview, type ReceiptRow,
 } from '../lib/receipts';
 import { MET_COLOR, MET_LABEL, formatLatency, scoreOf, type Score, type TrackRecord } from '../lib/reputation';
@@ -425,6 +425,9 @@ export default function Dashboard() {
   // Paid calls the buyer has not graded yet.
   const [pending, setPending] = useState<PendingReview[]>([]);
   const [reviewing, setReviewing] = useState<PendingReview | null>(null);
+  // Expectation carried in from a Claude handoff link, prefilled into Hire & pay.
+  const [handoffExpectation, setHandoffExpectation] = useState('');
+  const [handoffError, setHandoffError] = useState<string | null>(null);
   const [editAgentId, setEditAgentId] = useState<string | null>(null);
 
   // ---- live wallet (Privy embedded wallet, on Arc) ----
@@ -514,6 +517,47 @@ export default function Dashboard() {
       .catch(() => { if (alive) { setWalletError('Could not reach the Arc explorer.'); setWalletLoading(false); } });
     return () => { alive = false; };
   }, [walletAddress, walletNonce]);
+
+  // A link from sovereign-mcp: the agent already knows the worker and what was
+  // asked for, so carry that straight into the right modal instead of making the
+  // human retype it. Runs once the market is loaded, since `hire` needs the
+  // Listing. The query string is stripped afterwards so a refresh does not
+  // re-open the modal.
+  const handoffDone = useRef(false);
+  useEffect(() => {
+    if (handoffDone.current || marketLoading) return;
+    const h = readHandoff(window.location.search);
+    if (!h) return;
+    handoffDone.current = true;
+
+    if (h.kind === 'hire') {
+      const listing = market.find((l) => l.id === h.agentId);
+      if (listing) {
+        setTab('marketplace');
+        setHandoffExpectation(h.expectation);
+        setHireId(listing.id);
+      } else {
+        setHandoffError(`Claude referred you to "${h.agentName}", but it is not an active listing.`);
+      }
+    } else {
+      const review: PendingReview = {
+        settlementRef: h.settlementRef,
+        agentId: h.agentId,
+        agentName: h.agentName,
+        amountUsdc: h.amountUsdc,
+        expectation: h.expectation,
+        hiredAt: Date.now(),
+        buyerAgentId: '',
+        latencyMs: h.latencyMs,
+        delivered: h.delivered,
+      };
+      addPending(review);
+      setPending(readPending());
+      setTab('overview');
+      setReviewing(review);
+    }
+    window.history.replaceState({}, '', window.location.pathname);
+  }, [marketLoading, market]);
 
   // Refetch when the tab regains focus (e.g. returning from the faucet), so new
   // deposits appear without a manual reload.
@@ -698,6 +742,12 @@ export default function Dashboard() {
                 <Stat label="Active agents" value={String(activeCount)} sub={`${agents.length} total`} />
                 <Stat label="Allowlisted" value={String(allowlist.length)} sub="trusted workers" />
               </div>
+
+              {handoffError && (
+                <div className="mt-6 rounded-xl border border-amber-400/30 bg-amber-400/5 px-4 py-3 text-[11px] text-amber-400">
+                  {handoffError}
+                </div>
+              )}
 
               {pending.length > 0 && (
                 <div className="mt-6 rounded-xl border border-amber-400/30 bg-amber-400/5 p-5">
@@ -1098,7 +1148,14 @@ export default function Dashboard() {
 
       {/* Hire & pay a worker, gated by the buyer spend policy */}
       {hireListing && (
-        <HirePayModal listing={hireListing} agents={agents} allowlist={allowlist} onPay={payWorker} onClose={() => setHireId(null)} />
+        <HirePayModal
+          listing={hireListing}
+          agents={agents}
+          allowlist={allowlist}
+          onPay={payWorker}
+          initialExpectation={handoffExpectation}
+          onClose={() => { setHireId(null); setHandoffExpectation(''); }}
+        />
       )}
       {reviewing && (
         <ReviewModal
@@ -1167,9 +1224,10 @@ function ReviewModal({
   onClose: () => void;
 }) {
   const [met, setMet] = useState<number | null>(null);
-  const [delivered, setDelivered] = useState(true);
+  // Prefilled when the agent made the call itself and measured it.
+  const [delivered, setDelivered] = useState(review.delivered !== false);
   const [note, setNote] = useState('');
-  const [latency, setLatency] = useState('');
+  const [latency, setLatency] = useState(review.latencyMs ? String(review.latencyMs) : '');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [hash, setHash] = useState<string | null>(null);
@@ -1853,17 +1911,19 @@ function WithdrawModal({
 // after the selected buyer agent's spend policy clears. A call at/above the
 // approval threshold needs an explicit tick before it can send.
 function HirePayModal({
-  listing, agents, allowlist, onPay, onClose,
+  listing, agents, allowlist, onPay, onClose, initialExpectation,
 }: {
   listing: Listing;
   agents: BuyerAgent[];
   allowlist: AllowEntry[];
   onPay: (l: Listing, agentId: string, expectation: string) => Promise<string>;
   onClose: () => void;
+  /** Carried in from a Claude handoff link. */
+  initialExpectation?: string;
 }) {
   const price = Number(listing.price || 0);
   const [agentId, setAgentId] = useState(agents.find((a) => a.status === 'active')?.id ?? agents[0]?.id ?? '');
-  const [expectation, setExpectation] = useState('');
+  const [expectation, setExpectation] = useState(initialExpectation ?? '');
   const [approved, setApproved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -1953,7 +2013,9 @@ function HirePayModal({
               className="mt-1 w-full resize-none rounded-lg border border-hairline bg-background px-3 py-2 text-sm outline-none focus:border-accent"
             />
             <span className="mt-1 block text-[10px] text-muted">
-              You&apos;ll grade the result against this. It goes on-chain with your review.
+              {initialExpectation
+                ? 'Carried over from your agent — edit it if that is not what you wanted.'
+                : 'You\u2019ll grade the result against this. It goes on-chain with your review.'}
             </span>
           </label>
 
