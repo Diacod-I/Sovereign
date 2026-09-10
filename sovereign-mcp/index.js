@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // Sovereign MCP server — connects an agent (Claude) to the Sovereign marketplace.
 // Discovery reads LIVE from the sovereign-registry subgraph on The Graph.
 // Run: SUBGRAPH_URL=<studio query url> node index.js

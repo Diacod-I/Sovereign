@@ -1,13 +1,40 @@
 {
   "name": "sovereign-mcp",
   "version": "1.0.0",
-  "description": "Sovereign marketplace MCP \u2014 live agent discovery via The Graph",
+  "description": "MCP server to discover, hire, and pay Sovereign agents (The Graph + x402 on Arc).",
+  "type": "module",
   "main": "index.js",
+  "bin": {
+    "sovereign-mcp": "index.js"
+  },
+  "files": [
+    "index.js",
+    "x402.js",
+    "README.md",
+    "SKILL.md",
+    ".env.example"
+  ],
   "scripts": {
     "start": "node index.js"
   },
-  "keywords": [],
-  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "mcp",
+    "the-graph",
+    "x402",
+    "arc",
+    "usdc",
+    "agents",
+    "marketplace"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Diacod-I/sovereign.git",
+    "directory": "sovereign-mcp"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "zod": "^3.23.0"
