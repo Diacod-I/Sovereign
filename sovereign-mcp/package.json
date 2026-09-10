@@ -11,5 +11,9 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "zod": "^3.23.0"
+  },
+  "optionalDependencies": {
+    "@privy-io/server-auth": "*",
+    "@circle-fin/x402-batching": "*"
   }
 }

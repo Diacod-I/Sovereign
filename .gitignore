@@ -17,3 +17,4 @@ subgraph/build/
 
 # Env
 **/.env.local
+.claude/settings.local.json
