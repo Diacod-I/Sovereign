@@ -536,9 +536,8 @@ export default function Dashboard() {
                     <Copyable value={a.wallet} className="mt-1 font-mono text-[11px] text-muted hover:text-foreground">{short(a.wallet)}</Copyable>
                     <div className="mt-4 grid grid-cols-2 gap-y-2 text-sm">
                       <div className="text-muted">Daily budget</div><div className="text-right font-mono">${a.dailyBudget}</div>
-                      <div className="text-muted">Per action</div><div className="text-right font-mono">${a.perAction}</div>
-                      <div className="text-muted">Approval over</div><div className="text-right font-mono">${a.approvalThreshold}</div>
-                      <div className="text-muted">Allowlist</div><div className="text-right font-mono">{allowlist.length}</div>
+                      <div className="text-muted">Per action budget</div><div className="text-right font-mono">${a.perAction}</div>
+                      <div className="text-muted">Threshold for no approval</div><div className="text-right font-mono">${a.approvalThreshold}</div>
                     </div>
                     <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-[#1c1c1c]">
                       <div className="h-full rounded-full bg-accent" style={{ width: `${Math.min(100, (a.spentToday / a.dailyBudget) * 100 || 0)}%` }} />
