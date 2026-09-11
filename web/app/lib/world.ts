@@ -61,8 +61,18 @@ export type SellerVerification = {
   nullifierHash: string;
   level: string;
   at: number;
-  /** Arc tx that published this on-chain. Absent means local only. */
+  /** Arc tx that published this, when this browser is the one that sent it. */
   tx?: string;
+  /**
+   * Whether a record for this wallet exists on-chain, which is the only thing
+   * that makes the badge visible to anyone else.
+   *
+   * Deliberately not derived from `tx`: that only says whether THIS browser
+   * published it. Verify on your phone, open the site on a laptop, and `tx` is
+   * absent while the verification is perfectly public, so keying the warning off
+   * it told people the opposite of the truth.
+   */
+  onChain?: boolean;
 };
 
 const KEY = 'sovereign_seller_world';
@@ -108,7 +118,11 @@ export function mergeVerification(
       level: onChain.level,
       at: onChain.at * 1000,
       tx: local?.tx,
+      onChain: true,
     };
   }
-  return local;
+  // No chain record. Trust an optimistic local flag from a publish this browser
+  // just made, since the subgraph lags the chain by a few seconds and the badge
+  // should not blink back to "unpublished" in between.
+  return local ? { ...local, onChain: local.onChain ?? false } : null;
 }

@@ -386,7 +386,7 @@ export default function SellerDashboard() {
                     onClick={startEditProfile}
                     className="rounded-lg border border-hairline px-4 py-2 text-sm text-muted transition-colors hover:text-foreground"
                   >
-                    Edit profile
+                    {profileSaved && <span className="mb-2 text-sm text-accent">Saved</span> || <span className="mb-2 text-sm text-muted">Edit Profile</span>}
                   </button>
                 )}
               </div>
@@ -405,7 +405,6 @@ export default function SellerDashboard() {
                       <span className="relative z-10 inline-flex shrink-0 rounded-full border-4 border-panel bg-panel">
                         <Avatar name={pName || seller || 'S'} size={72} />
                       </span>
-                      {profileSaved && <span className="mb-2 text-sm text-accent">Saved</span>}
                     </div>
 
                     <h2 className="mt-3 text-xl font-semibold tracking-tight">{pName || seller}</h2>
@@ -418,8 +417,8 @@ export default function SellerDashboard() {
                         </span>
                         {/* The nullifier is the only durable handle on this
                             verification, so make it copyable rather than decorative. */}
-                        {!worldV.tx && (
-                          <span className="text-amber-400">· on this device only</span>
+                        {!worldV.onChain && (
+                          <span className="text-amber-400">· not published, buyers cannot see this</span>
                         )}
                         {worldV.nullifierHash !== 'demo' && (
                           <Copyable

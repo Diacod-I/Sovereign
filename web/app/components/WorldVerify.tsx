@@ -86,6 +86,8 @@ export default function WorldVerify({ wallet, onVerified, label, className, disa
       level: proof.level,
       at: Date.now(),
       tx,
+      // Optimistic: the tx is in, the subgraph has not caught up yet.
+      onChain: !!tx,
     };
     writeVerification(verification);
     onVerified(verification);
