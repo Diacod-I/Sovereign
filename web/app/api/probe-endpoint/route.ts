@@ -14,6 +14,8 @@ import type { ProbeCheck, ProbeQuote, ProbeResult } from '../../lib/probe';
 // The guard moved to lib/ssrf so the hosted worker proxy uses the same one. Two
 // copies of an SSRF check is one copy that quietly falls behind.
 import { ALLOW_PRIVATE, assertPublicHost } from '../../lib/ssrf';
+import { SITE_URL } from '../../lib/hosted';
+import { getWorker } from '../../lib/hosted.server';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -189,7 +191,30 @@ export async function POST(request: Request) {
   // --- 7. optional ownership proof --------------------------------------
   // Without this, anyone can list somebody else's API under their own payTo and
   // resell it. Advisory for now so existing sellers are not locked out.
-  if (body.owner) {
+  //
+  // A Sovereign-hosted endpoint is the exception, and asking it for a
+  // .well-known file is incoherent: the origin is OURS, so the seller could
+  // never serve one and every hosted worker would warn forever. We already know
+  // who owns it, because creating it required a signature from that wallet, and
+  // checking our own store is a stronger proof than a file anyone who controls
+  // the domain could write.
+  const hostedPrefix = `${SITE_URL}/w/`;
+  if (body.owner && endpoint.startsWith(hostedPrefix)) {
+    const slug = endpoint.slice(hostedPrefix.length).split(/[/?#]/)[0];
+    const worker = slug ? await getWorker(slug) : null;
+    if (!worker) {
+      add('ownership', 'Proves endpoint ownership', 'fail',
+        'This looks like a Sovereign-hosted endpoint but no such worker exists.');
+    } else if (worker.owner.toLowerCase() === body.owner.toLowerCase()) {
+      add('ownership', 'Proves endpoint ownership', 'pass',
+        'Sovereign hosts this endpoint and it was created by this wallet.');
+    } else {
+      // Someone trying to list another seller's hosted endpoint under their own
+      // payout address. The well-known check could never have caught this.
+      add('ownership', 'Proves endpoint ownership', 'fail',
+        'This hosted endpoint belongs to a different wallet.');
+    }
+  } else if (body.owner) {
     try {
       const wk = new URL('/.well-known/sovereign-challenge', url.origin);
       const r = await fetch(wk, {
