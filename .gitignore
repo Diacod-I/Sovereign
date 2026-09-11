@@ -19,3 +19,4 @@ subgraph/build/
 **/.env.local
 .codex/
 .claude/
+.agents/
