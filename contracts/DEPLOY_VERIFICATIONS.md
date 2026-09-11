@@ -49,6 +49,12 @@ Local `.env.local` and Vercel both need:
 | `NEXT_PUBLIC_VERIFICATIONS_ADDRESS` | contract from step 2 | |
 | `NEXT_PUBLIC_ARC_CHAIN_ID` | `5042002` | Optional; this is the default. |
 
+One variable must be ABSENT rather than present: `NEXT_PUBLIC_WORLD_DEMO`. It
+grants a badge with no check at all, which is why the badge reads "Demo" instead
+of "Selfie Check" when you run locally. It belongs in `.env.local` and nowhere
+else. On Vercel its presence would let anyone mark themselves a unique human,
+which is the whole thing this contract exists to prevent.
+
 `NEXT_PUBLIC_*` are inlined at build time, so adding them on Vercel requires a
 redeploy, not just a save.
 
@@ -94,6 +100,29 @@ question should not look like a verified answer.
   another account.
 - Verifying a second wallet with the same World ID fails with "This World ID has
   already verified a different wallet."
+- The marketplace grows a "Verified humans only" filter once at least one
+  account is verified, and switching it on hides listings from everyone else.
+  That filter is the point of the whole exercise: a badge nobody can act on is
+  a sticker, and being able to say "only people who proved they are one human"
+  is what makes one person running ten seller wallets cost them something.
+- Your own profile links the record to its Arc transaction, and a verification
+  that never reached the chain offers a "Publish to Arc" button rather than only
+  telling you it is missing.
+
+## Verified before you spend gas
+
+The contract was compiled with solc 0.8.24 (3.2 KB, no warnings) and executed in
+an EVM with Arc's chain id, against signatures built exactly the way
+`web/app/lib/attestation.ts` builds them. Eight cases pass: a valid attestation
+is accepted; the same nullifier cannot claim a second account; an attestation
+naming one account is worthless to another; a non-attestor signature is refused;
+an expired one is refused; verifying twice is refused; a zero nullifier is
+refused.
+
+The one that matters most is the first, because the EIP-712 domain separator
+mixes in `block.chainid` and the struct hash must match the contract's typehash
+byte for byte. A mismatch there reverts as `BadSignature` and looks like a
+wrong attestor key, which is a long way to go for a wrong answer. It matches.
 
 ## What this does and does not prove
 

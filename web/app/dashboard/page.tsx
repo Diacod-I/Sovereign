@@ -490,6 +490,35 @@ export default function Dashboard() {
   const [range, setRange] = useState<RangeKey>('1w');
   const [walletNonce, setWalletNonce] = useState(0); // bump to refetch
 
+  // The Gateway balance: separate from the treasury, and the only one an agent
+  // payment can actually spend. Read straight from the GatewayWallet contract,
+  // so it needs no Circle API key. null means "not read yet or unreadable",
+  // which the card must not render as zero.
+  const [gatewayBalance, setGatewayBalance] = useState<number | null>(null);
+  const [gatewayNonce, setGatewayNonce] = useState(0);
+  const reloadGateway = useCallback(() => setGatewayNonce((n) => n + 1), []);
+
+  useEffect(() => {
+    if (!walletAddress) return;
+    let alive = true;
+    gatewayAvailable(ARC_RPC_URL, walletAddress).then((v) => { if (alive) setGatewayBalance(v); });
+    return () => { alive = false; };
+  }, [walletAddress, gatewayNonce]);
+
+  /**
+   * Verification, used as a filter rather than a decoration.
+   *
+   * A badge nobody can act on is a sticker. Being able to say "only people who
+   * have proved they are one human" is what makes the World check worth doing:
+   * it is the difference between a claim on a profile and a rule about who you
+   * are willing to hire. It also puts the cost on the right side -- one person
+   * spinning up ten seller wallets gets ten listings that this switch hides.
+   */
+  const isVerifiedOwner = useCallback(
+    (owner: string) => !!verified && verified.has(owner.toLowerCase()),
+    [verified],
+  );
+
   // money modals
   const [showDeposit, setShowDeposit] = useState(false);
   const [showWithdraw, setShowWithdraw] = useState(false);
@@ -695,19 +724,6 @@ export default function Dashboard() {
   const removeWl = (id: string) => setAllowlist((list) => list.filter((w) => w.id !== id));
 
   const openListing = market.find((l) => l.id === openId) || null;
-  /**
-   * Verification, used as a filter rather than a decoration.
-   *
-   * A badge nobody can act on is a sticker. Being able to say "only people who
-   * have proved they are one human" is what makes the World check worth doing:
-   * it is the difference between a claim on a profile and a rule about who you
-   * are willing to hire. It also puts the cost on the right side -- one person
-   * spinning up ten seller wallets gets ten listings that this switch hides.
-   */
-  const isVerifiedOwner = useCallback(
-    (owner: string) => !!verified && verified.has(owner.toLowerCase()),
-    [verified],
-  );
   const filtered = market.filter((l) => {
     if (verifiedOnly && !isVerifiedOwner(l.owner)) return false;
     return (l.name + ' ' + l.summary + ' ' + l.tags + ' ' + l.owner)
@@ -733,20 +749,6 @@ export default function Dashboard() {
 
   const reloadWallet = () => setWalletNonce((n) => n + 1);
 
-  // The Gateway balance: separate from the treasury, and the only one an agent
-  // payment can actually spend. Read straight from the GatewayWallet contract,
-  // so it needs no Circle API key. null means "not read yet or unreadable",
-  // which the card must not render as zero.
-  const [gatewayBalance, setGatewayBalance] = useState<number | null>(null);
-  const [gatewayNonce, setGatewayNonce] = useState(0);
-  const reloadGateway = useCallback(() => setGatewayNonce((n) => n + 1), []);
-
-  useEffect(() => {
-    if (!walletAddress) return;
-    let alive = true;
-    gatewayAvailable(ARC_RPC_URL, walletAddress).then((v) => { if (alive) setGatewayBalance(v); });
-    return () => { alive = false; };
-  }, [walletAddress, gatewayNonce]);
 
   /**
    * Move USDC from the treasury into Gateway, so agents can spend it.
