@@ -845,7 +845,6 @@ export default function Dashboard() {
                 <div className="rounded-xl border border-hairline bg-panel p-5">
                   <div className="flex items-center justify-between">
                     <h2 className="text-sm font-medium">Spend limits</h2>
-                    <Pill kind={policy.paused ? 'paused' : 'active'} />
                   </div>
                   <div className="mt-4 grid grid-cols-2 gap-y-2 text-sm">
                     <div className="text-muted">Daily budget</div><div className="text-right font-mono">${policy.dailyBudget}</div>

@@ -25,6 +25,16 @@ import { readProfile, writeProfile } from '../lib/profile';
 type Tab = 'workers' | 'profile';
 
 /**
+ * How long a worker description may be.
+ *
+ * It goes on-chain in AgentRegistry, so every character is calldata the seller
+ * pays for once and storage that stays forever. Long enough to say what the
+ * worker does, what it returns, and what it will not do; short enough that
+ * nobody pastes an essay into a transaction by accident.
+ */
+const MAX_DESCRIPTION = 600;
+
+/**
  * The test bench is built and tested but not shown yet.
  *
  * Hidden rather than deleted: the component, its API route and the saved cases
@@ -585,7 +595,16 @@ export default function SellerDashboard() {
               <label className="text-sm"><span className="text-muted">Name</span>
                 <input autoFocus value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="e.g. Address Risk Worker" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" /></label>
               <label className="text-sm"><span className="text-muted">Description</span>
-                <input value={f.desc} onChange={(e) => setF({ ...f, desc: e.target.value })} placeholder="One line on what it does" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" /></label>
+                <textarea
+                  value={f.desc}
+                  onChange={(e) => setF({ ...f, desc: e.target.value })}
+                  rows={4}
+                  maxLength={MAX_DESCRIPTION}
+                  placeholder={'What it does, what it returns, and what it will not do.\n\nBuyers read this before spending, and their agents read it to decide whether you are the right worker at all.'}
+                  className="mt-1 w-full resize-y rounded-lg border border-hairline bg-background px-3 py-2 text-sm leading-relaxed outline-none focus:border-accent"
+                />
+                <span className="mt-1 block text-right text-[10px] text-muted">{f.desc.length}/{MAX_DESCRIPTION}</span>
+              </label>
               <label className="text-sm"><span className="text-muted">Tags</span>
                 <input value={f.tags} onChange={(e) => setF({ ...f, tags: e.target.value })} placeholder="risk, address, sanctions" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" /></label>
               <div className="grid grid-cols-2 gap-3">
@@ -742,7 +761,16 @@ function EditWorkerModal({ agent, onSave, onClose }: { agent: Agent; onSave: (in
           <label className="text-sm"><span className="text-muted">Name</span>
             <input autoFocus value={name} onChange={(e) => setName(e.target.value)} className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" /></label>
           <label className="text-sm"><span className="text-muted">Description</span>
-            <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="One line on what it does" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" /></label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={4}
+              maxLength={MAX_DESCRIPTION}
+              placeholder="What it does, what it returns, and what it will not do."
+              className="mt-1 w-full resize-y rounded-lg border border-hairline bg-background px-3 py-2 text-sm leading-relaxed outline-none focus:border-accent"
+            />
+            <span className="mt-1 block text-right text-[10px] text-muted">{description.length}/{MAX_DESCRIPTION}</span>
+          </label>
           <label className="text-sm"><span className="text-muted">Tags</span>
             <input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="risk, address, sanctions" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" /></label>
           <div className="grid grid-cols-2 gap-3">
