@@ -1,0 +1,287 @@
+'use client';
+
+import { useCallback, useEffect, useState } from 'react';
+import { usePrivy, useSignMessage, useHeadlessDelegatedActions } from '@privy-io/react-auth';
+import Brand from '../components/Brand';
+import Copyable from '../components/Copyable';
+import { useEmbeddedWallet } from '../lib/useEmbeddedWallet';
+import { formatCode, linkApprovalMessage, type LinkScope } from '../lib/link';
+import { readProfile, writeProfile } from '../lib/profile';
+
+/**
+ * Approving a terminal.
+ *
+ * The code is shown here as well as in the terminal, and the person is asked to
+ * check they match before approving. That comparison is the whole security of a
+ * device flow: without it, anyone can start a pairing, send you this URL, and
+ * have you approve their session onto your account.
+ *
+ * This page is also the signup. Someone who has never used Sovereign runs the
+ * command, lands here, signs in with an email, gets a wallet, and approves in
+ * one visit. Sending them away to create an account and back again is how a
+ * one-command promise stops being one command.
+ */
+
+type Status = {
+  code: string;
+  scope: LinkScope;
+  label: string | null;
+  state: 'pending' | 'approved' | 'denied' | 'expired';
+};
+
+const post = async (body: unknown) => {
+  const res = await fetch('/api/link', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data?.error) throw new Error(data?.error || `Request failed (HTTP ${res.status}).`);
+  return data;
+};
+
+export default function LinkPage() {
+  const { ready, authenticated, login, user } = usePrivy();
+  const { signMessage } = useSignMessage();
+  const { delegateWallet } = useHeadlessDelegatedActions();
+  const { address } = useEmbeddedWallet();
+
+  const [code, setCode] = useState('');
+  const [status, setStatus] = useState<Status | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<'approved' | 'denied' | null>(null);
+  const [name, setName] = useState('');
+  const [needsName, setNeedsName] = useState(false);
+
+  // Read once on mount rather than via useSearchParams, so this page stays static.
+  useEffect(() => {
+    const c = formatCode(new URLSearchParams(window.location.search).get('code') ?? '');
+    setCode(c);
+    if (!c) return;
+    post({ op: 'status', code: c })
+      .then((d) => setStatus(d as Status))
+      .catch((e) => setErr(e instanceof Error ? e.message : 'Could not read that code.'));
+  }, []);
+
+  useEffect(() => {
+    if (authenticated && !readProfile()) setNeedsName(true);
+  }, [authenticated]);
+
+  const approve = useCallback(async () => {
+    if (!address || !status) return;
+    setErr(null);
+    setBusy(true);
+    try {
+      // A brand-new account has no name yet, and the name is what buyers see on
+      // anything this terminal later lists. Ask before granting, not after.
+      if (needsName) {
+        const trimmed = name.trim();
+        if (!trimmed) { setErr('Give your account a name first.'); setBusy(false); return; }
+        writeProfile({ name: trimmed, bio: '' });
+        setNeedsName(false);
+      }
+      // Delegation FIRST, approval second. If Privy refuses or the person backs
+      // out of its prompt, no token should exist: a `spend` token whose wallet
+      // was never delegated is a credential that looks like it can pay and
+      // cannot, which surfaces later as an unexplained failure mid-task.
+      if (status.scope === 'spend') {
+        await delegateWallet({ address, chainType: 'ethereum' });
+      }
+
+      const issuedAt = new Date().toISOString();
+      const message = linkApprovalMessage({ code: status.code, account: address, scope: status.scope, issuedAt });
+      const { signature } = await signMessage({ message }, { address });
+      await post({ op: 'approve', code: status.code, account: address, scope: status.scope, issuedAt, signature });
+      setDone('approved');
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not approve.');
+    } finally {
+      setBusy(false);
+    }
+  }, [address, status, signMessage, delegateWallet, needsName, name]);
+
+  const deny = useCallback(async () => {
+    if (!status) return;
+    try { await post({ op: 'deny', code: status.code }); } catch {}
+    setDone('denied');
+  }, [status]);
+
+  const shell = (children: React.ReactNode) => (
+    <div className="flex min-h-screen items-center justify-center px-6">
+      <div className="w-full max-w-md rounded-2xl border border-hairline bg-panel p-7">
+        <Brand />
+        {children}
+      </div>
+    </div>
+  );
+
+  if (!code) {
+    return shell(
+      <>
+        <h1 className="mt-6 text-xl font-semibold tracking-tight">No code to approve</h1>
+        <p className="mt-2 text-sm leading-relaxed text-muted">
+          This page finishes a pairing started from a terminal. Run{' '}
+          <span className="font-mono text-foreground">npx sovereign-mcp@latest link</span> and it
+          will open the right link for you.
+        </p>
+      </>,
+    );
+  }
+
+  if (err && !status) {
+    return shell(
+      <>
+        <h1 className="mt-6 text-xl font-semibold tracking-tight">That code did not work</h1>
+        <p className="mt-2 text-sm leading-relaxed text-muted">{err}</p>
+      </>,
+    );
+  }
+
+  if (done === 'approved') {
+    return shell(
+      <>
+        <h1 className="mt-6 text-xl font-semibold tracking-tight">Terminal linked</h1>
+        <p className="mt-2 text-sm leading-relaxed text-muted">
+          Go back to your terminal. It has picked this up already.
+        </p>
+        <p className="mt-4 text-[11px] leading-relaxed text-muted">
+          You can revoke this at any time from Overview. Revoking takes effect on the
+          next call, not the next restart.
+        </p>
+        <a href="/dashboard" className="mt-6 block w-full rounded-lg bg-accent px-4 py-2.5 text-center text-sm font-medium text-black">
+          Open Sovereign
+        </a>
+      </>,
+    );
+  }
+
+  if (done === 'denied') {
+    return shell(
+      <>
+        <h1 className="mt-6 text-xl font-semibold tracking-tight">Not linked</h1>
+        <p className="mt-2 text-sm leading-relaxed text-muted">
+          Nothing was granted. If you did not start this, it is worth knowing that
+          somebody else did.
+        </p>
+      </>,
+    );
+  }
+
+  if (status && status.state !== 'pending') {
+    return shell(
+      <>
+        <h1 className="mt-6 text-xl font-semibold tracking-tight">
+          {status.state === 'expired' ? 'That code expired' : 'That code has been used'}
+        </h1>
+        <p className="mt-2 text-sm leading-relaxed text-muted">
+          Run <span className="font-mono text-foreground">npx sovereign-mcp@latest link</span> again
+          for a fresh one.
+        </p>
+      </>,
+    );
+  }
+
+  const spends = status?.scope === 'spend';
+
+  return shell(
+    <>
+      <h1 className="mt-6 text-xl font-semibold tracking-tight">Link a terminal</h1>
+
+      <div className="mt-5 rounded-lg border border-hairline bg-background px-3 py-3 text-center">
+        <div className="text-[10px] uppercase tracking-wider text-muted">Check this matches your terminal</div>
+        <div className="mt-1 font-mono text-2xl tracking-[0.2em]">{status?.code ?? code}</div>
+        {status?.label && <div className="mt-1 font-mono text-[10px] text-muted">{status.label}</div>}
+      </div>
+
+      <div className="mt-4 rounded-lg border border-hairline bg-background px-3 py-2.5">
+        <div className="text-[10px] uppercase tracking-wider text-muted">This will let Claude Code</div>
+        <ul className="mt-1.5 flex flex-col gap-1 text-[11px] leading-relaxed text-muted">
+          <li>Search the marketplace and read track records. Free, no payment.</li>
+          {spends ? (
+            <>
+              <li className="text-foreground">
+                Pay workers from this wallet, without asking you each time.
+              </li>
+              <li>
+                Only within your spend limits, only to workers on your allowlist, and
+                never above your approval threshold, which still needs you in a browser.
+              </li>
+            </>
+          ) : (
+            <li>Hand payments back to you in the browser to confirm.</li>
+          )}
+        </ul>
+      </div>
+
+      {!ready ? null : !authenticated ? (
+        <>
+          <p className="mt-4 text-[11px] leading-relaxed text-muted">
+            Sign in to approve. If you have never used Sovereign, this creates your
+            account and wallet.
+          </p>
+          <button
+            onClick={login}
+            className="mt-3 w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90"
+          >
+            Sign in to continue
+          </button>
+        </>
+      ) : (
+        <>
+          <div className="mt-4 rounded-lg border border-hairline bg-background px-3 py-2.5">
+            <div className="text-[10px] uppercase tracking-wider text-muted">Linking to</div>
+            {address ? (
+              <Copyable value={address} className="mt-0.5 break-all font-mono text-xs hover:text-foreground">
+                {address}
+              </Copyable>
+            ) : (
+              <div className="mt-0.5 font-mono text-xs text-muted">creating your wallet…</div>
+            )}
+            {user?.email?.address && (
+              <div className="mt-1 text-[10px] text-muted">{user.email.address}</div>
+            )}
+          </div>
+
+          {needsName && (
+            <label className="mt-3 block text-sm">
+              <span className="text-muted">Name your account</span>
+              <input
+                autoFocus
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Maya Chen"
+                className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent"
+              />
+              <span className="mt-1 block text-[10px] leading-relaxed text-muted">
+                This is what buyers see on anything you list.
+              </span>
+            </label>
+          )}
+
+          {err && <div className="mt-3 rounded-lg border border-red-400/30 bg-red-400/5 px-3 py-2 text-[11px] text-red-400">{err}</div>}
+
+          <div className="mt-5 flex gap-3">
+            <button
+              disabled={!address || busy}
+              onClick={approve}
+              className="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40"
+            >
+              {busy ? 'Approving…' : spends ? 'Approve and allow spending' : 'Approve'}
+            </button>
+            <button
+              onClick={deny}
+              className="rounded-lg border border-hairline px-4 py-2.5 text-sm text-muted transition-colors hover:text-foreground"
+            >
+              Reject
+            </button>
+          </div>
+
+          <p className="mt-3 text-[11px] leading-relaxed text-muted">
+            If you did not just run that command, reject this.
+          </p>
+        </>
+      )}
+    </>,
+  );
+}

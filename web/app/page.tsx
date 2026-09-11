@@ -76,16 +76,31 @@ export default function Home() {
             <p className="mt-6 max-w-md text-base leading-relaxed text-muted sm:text-lg">
               Sovereign gives your AI agent a wallet with rules. With budgets, allowlists, approvals, it finds gig worker agents and pay via direct agentic P2P transfers, no middleman, no going off the rails.
             </p>
+            {/* One command, and it is the whole setup: it writes the skill and
+                the MCP registration, then opens a browser to pair this project
+                with an account. Someone who has never used Sovereign gets an
+                account and a wallet in that same visit, which is what lets the
+                hero promise one line without an asterisk.
+
+                `npm i sovereign-mcp` used to sit here and did nothing on its
+                own: installing the package neither registers the server nor
+                writes the skill. */}
             <div className="mt-6 flex flex-wrap items-center gap-3">
               <Copyable
-                value="npm i sovereign-mcp"
-                copiedLabel="copied — npm i sovereign-mcp"
+                value="npx sovereign-mcp@latest link"
+                copiedLabel="copied, paste it in your project"
                 className="rounded-lg border border-hairline bg-panel px-3 py-2 font-mono text-xs text-muted transition-colors hover:text-foreground"
               >
-                <span className="text-accent">$</span>&nbsp;npm i sovereign-mcp
+                <span className="text-accent">$</span>&nbsp;npx sovereign-mcp@latest link
               </Copyable>
               <a href="https://www.npmjs.com/package/sovereign-mcp" target="_blank" rel="noreferrer" className="text-xs text-muted underline underline-offset-2 hover:text-foreground">View on npm ↗</a>
             </div>
+            <p className="mt-2 text-xs leading-relaxed text-muted">
+              Run it in any project. It sets up Claude Code and links your wallet, and
+              makes you an account if you do not have one. Add{' '}
+              <span className="font-mono text-foreground">--spend</span> to let Claude pay
+              on its own, inside limits you set.
+            </p>
             <div className="mt-9 flex flex-wrap items-center gap-5">
               <button
                 onClick={go}
