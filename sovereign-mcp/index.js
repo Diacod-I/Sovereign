@@ -14,8 +14,15 @@ import {
 } from './x402.js';
 import { score, summarise, tier, trackRecord } from './reputation.js';
 
-// `npx sovereign-mcp init` wires the skill + .mcp.json into the current project.
-// Handled before anything else so it never touches the stdio transport.
+// Subcommands are handled before anything else so they never touch the stdio
+// transport. `link` is the one command the site puts in front of people: it
+// writes the same files `init` does, then pairs the project with an account.
+// `init` stays as the offline path for anyone who does not want to link.
+if (process.argv[2] === 'link') {
+  const { runLink, writeProjectFiles } = await import('./link.js');
+  await runLink({ writeFiles: writeProjectFiles });
+  process.exit(0);
+}
 if (process.argv[2] === 'init') {
   await import('./init.js');
   process.exit(0);
