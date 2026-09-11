@@ -21,7 +21,7 @@ import {
   type StoredWorker,
 } from '../../lib/hosted.server';
 import { assertFetchableUrl } from '../../lib/ssrf';
-import { kvConfigured } from '../../lib/kv';
+import { kvConfigured, storageUsable } from '../../lib/kv';
 import {
   DEFAULT_TIMEOUT_SECONDS,
   MAX_TIMEOUT_SECONDS,
@@ -34,6 +34,19 @@ export const dynamic = 'force-dynamic';
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+
+/**
+ * Whether a hosted worker saved now will still be here tomorrow.
+ *
+ * `storageUsable` accepts SOVEREIGN_ALLOW_EPHEMERAL_LINKS as an escape hatch for
+ * a single long-lived process. That hatch is refused here when we are on Vercel,
+ * because the in-process Map it permits is per-instance and dies on every cold
+ * start — which is precisely the environment where a seller would register a
+ * permanent on-chain listing pointing at an endpoint that then vanishes. The
+ * escape hatch was written for `next start` on one box; taking it on serverless
+ * is how a worker 404s two days after it demonstrably worked.
+ */
+const workersDurable = kvConfigured || (storageUsable && process.env.VERCEL !== '1');
 
 /** A header name we are willing to attach a secret to. */
 const HEADER_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,40}$/;
@@ -78,11 +91,30 @@ async function handleList(body: { owner?: string; issuedAt?: string; signature?:
     ok: true,
     // Never the sealed secret, and never the plaintext — only whether one exists.
     workers: workers.map((w) => ({ ...toPublic(w), url: hostedUrl(w.slug) })),
-    storage: { durable: kvConfigured },
+    storage: { durable: workersDurable },
   });
 }
 
 async function handleSave(body: SaveBody) {
+  // Refused rather than warned about. The listing a seller makes from this is
+  // written to a contract and is permanent; the record being saved here is not.
+  // Letting the two be created out of step produces a worker that is listed
+  // forever and answers never — which is a buyer's problem, not the operator's,
+  // and it is not something a line of returned JSON was ever going to prevent.
+  if (!workersDurable) {
+    return json(
+      {
+        error:
+          'This deployment has no durable store, so a hosted worker saved here would stop ' +
+          'existing on the next cold start while its on-chain listing lived on. Set ' +
+          'UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN, or SOVEREIGN_ALLOW_EPHEMERAL_LINKS=true ' +
+          'if this is a single long-lived process.',
+        storage: { durable: workersDurable },
+      },
+      503,
+    );
+  }
+
   if (!secretsConfigured && body.authSecret) {
     return json(
       { error: 'WORKER_SECRET_KEY is not set on the server, so an upstream secret cannot be stored safely. Save without one, or set the key.' },
@@ -185,7 +217,7 @@ async function handleSave(body: SaveBody) {
     // Surfaced rather than buried: without a durable store this endpoint stops
     // existing on the next cold start, and a seller about to register it
     // on-chain should know that before they pay gas.
-    storage: { durable: kvConfigured },
+    storage: { durable: workersDurable },
   });
 }
 

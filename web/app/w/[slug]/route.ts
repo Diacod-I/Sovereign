@@ -42,6 +42,16 @@ const json = (body: unknown, status: number, headers?: HeadersInit) =>
   });
 
 /**
+ * Said once, in both places, because the honest version of this is longer than
+ * "not found": the listing that sent you here still exists on-chain and always
+ * will, and it is the service behind it that has stopped existing.
+ */
+const MISSING =
+  'No such worker. This endpoint was listed on Sovereign but its configuration is gone, ' +
+  'so nothing can answer here. Nothing was charged. The owner can restore it by saving the ' +
+  'worker again in Sovereign, or retire the listing.';
+
+/**
  * A description of the worker, unpaid.
  *
  * Not part of x402 — it exists because a human who pastes the URL into a browser
@@ -51,7 +61,7 @@ const json = (body: unknown, status: number, headers?: HeadersInit) =>
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ slug: string }> }) {
   const { slug } = await ctx.params;
   const worker = await getWorker(slug);
-  if (!worker) return json({ error: 'No such worker.' }, 404);
+  if (!worker) return json({ error: MISSING }, 404);
   return json({
     ok: true,
     slug: worker.slug,
@@ -65,7 +75,10 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ slug: stri
 export async function POST(request: NextRequest, ctx: { params: Promise<{ slug: string }> }) {
   const { slug } = await ctx.params;
   const worker = await getWorker(slug);
-  if (!worker) return json({ error: 'No such worker.' }, 404);
+  // Before the payment wall, so a listing whose worker is gone costs a buyer
+  // nothing. The registry entry pointing here is on-chain and permanent; this
+  // record is not, which is the whole reason this branch has to be free.
+  if (!worker) return json({ error: MISSING }, 404);
 
   // Refused before the payment wall, not after it. A retired worker still has a
   // live on-chain listing pointing here, and the middleware settles before it
