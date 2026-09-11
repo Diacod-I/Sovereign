@@ -457,14 +457,14 @@ export default function SellerDashboard() {
 
       {/* List new agent modal */}
       {showNew && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-6" onClick={() => setShowNew(false)}>
-          <div className="relative w-full max-w-md rounded-2xl border border-hairline bg-panel p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <button onClick={() => setShowNew(false)} aria-label="Close" className="absolute right-4 top-4 text-muted transition-colors hover:text-foreground">
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 px-6 py-10 sm:items-center" onClick={() => setShowNew(false)}>
+          <div className="relative flex max-h-[85vh] w-full max-w-md flex-col rounded-2xl border border-hairline bg-panel p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <button onClick={() => setShowNew(false)} aria-label="Close" className="absolute right-4 top-4 z-10 text-muted transition-colors hover:text-foreground">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="6" y1="6" x2="18" y2="18" /><line x1="18" y1="6" x2="6" y2="18" /></svg>
             </button>
-            <h2 className="text-lg font-semibold tracking-tight">List a new agent</h2>
-            <p className="mt-1 text-sm text-muted">This registers your agent on-chain for buyers to discover.</p>
-            <div className="mt-5 flex flex-col gap-3">
+            <h2 className="shrink-0 text-lg font-semibold tracking-tight">List a new agent</h2>
+            <p className="mt-1 shrink-0 text-sm text-muted">This registers your agent on-chain for buyers to discover.</p>
+            <div className="-mx-6 mt-5 flex flex-1 flex-col gap-3 overflow-y-auto px-6">
               <label className="text-sm"><span className="text-muted">Name</span>
                 <input autoFocus value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="e.g. Address Risk Agent" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" /></label>
               <label className="text-sm"><span className="text-muted">Description</span>
@@ -502,7 +502,7 @@ export default function SellerDashboard() {
               )}
             </div>
             {txError && <div className="mt-4 rounded-lg border border-red-400/30 bg-red-400/5 px-3 py-2 text-[11px] text-red-400">{txError}</div>}
-            <div className="mt-5 flex gap-3">
+            <div className="mt-5 flex shrink-0 gap-3 border-t border-hairline pt-4">
               <button
                 disabled={
                   !f.name.trim() || !f.price.trim() || !f.endpoint.trim() || !!txPending ||
@@ -576,7 +576,7 @@ function EditWorkerModal({ agent, onSave, onClose }: { agent: Agent; onSave: (in
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-6" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 px-6 py-10 sm:items-center" onClick={onClose}>
       <div className="relative w-full max-w-md rounded-2xl border border-hairline bg-panel p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <button onClick={onClose} aria-label="Close" className="absolute right-4 top-4 text-muted transition-colors hover:text-foreground">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="6" y1="6" x2="18" y2="18" /><line x1="18" y1="6" x2="6" y2="18" /></svg>

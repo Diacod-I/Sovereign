@@ -42,7 +42,11 @@ export default function EndpointProbe({ endpoint, payTo, price, owner, onResult,
     }
   };
 
-  const warnings = result?.checks.filter((c) => c.status === 'warn').length ?? 0;
+  // Passes collapse to a compact row; anything needing action gets full detail.
+  const passed = result?.checks.filter((c) => c.status === 'pass') ?? [];
+  // Skips stay visible: a check that did not run is not a check that passed, and
+  // hiding it would let "Verified" imply more than was actually tested.
+  const notable = result?.checks.filter((c) => c.status !== 'pass') ?? [];
 
   return (
     <div className="rounded-lg border border-hairline bg-background p-3">
@@ -69,23 +73,51 @@ export default function EndpointProbe({ endpoint, payTo, price, owner, onResult,
 
       {result && (
         <>
-          <ul className="mt-2.5 flex flex-col gap-1.5">
-            {result.checks.map((c) => (
-              <li key={c.id} className="flex gap-2 text-[11px] leading-relaxed">
-                <span className={`mt-px font-mono ${statusColor[c.status]}`} aria-hidden="true">
-                  {statusGlyph[c.status]}
-                </span>
-                <span className="flex-1">
-                  <span className={c.status === 'skip' ? 'text-muted' : ''}>{c.label}</span>
-                  <span className="block text-muted">{c.detail}</span>
-                </span>
-              </li>
-            ))}
-          </ul>
+          {/* A passing check needs no explanation — the tick is the message.
+              Only failures and warnings earn a line of detail, which keeps the
+              panel short enough that the modal's action row stays in view. */}
+          {passed.length > 0 && (
+            <ul className="mt-2.5 flex flex-wrap gap-x-3 gap-y-1">
+              {passed.map((c) => (
+                <li key={c.id} className="flex items-center gap-1 text-[11px] text-muted">
+                  <span className="font-mono text-accent" aria-hidden="true">✓</span>
+                  {c.label}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {notable.length > 0 && (
+            <ul className="mt-2.5 flex flex-col gap-1.5">
+              {notable.map((c) => (
+                <li key={c.id} className="flex gap-2 text-[11px] leading-relaxed">
+                  <span className={`mt-px font-mono ${statusColor[c.status]}`} aria-hidden="true">
+                    {statusGlyph[c.status]}
+                  </span>
+                  <span className="flex-1">
+                    <span className={c.status === 'skip' ? 'text-muted' : ''}>{c.label}</span>
+                    <span className="block text-muted">{c.detail}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+
           <div className={`mt-2.5 border-t border-hairline pt-2 text-[11px] ${result.ok ? 'text-accent' : 'text-red-400'}`}>
-            {result.ok
-              ? `Endpoint verified in ${result.elapsedMs}ms${warnings ? ` · ${warnings} warning${warnings > 1 ? 's' : ''}` : ''}`
-              : 'Endpoint is not ready to list.'}
+            {result.ok ? (
+              <>
+                Verified in {result.elapsedMs}ms
+                {result.quote?.amount && (
+                  <span className="text-muted">
+                    {' · quoted '}
+                    {(Number(result.quote.amount) / 1e6).toString()} USDC
+                    {result.quote.payTo ? ` to ${result.quote.payTo.slice(0, 6)}…${result.quote.payTo.slice(-4)}` : ''}
+                  </span>
+                )}
+              </>
+            ) : (
+              'Endpoint is not ready to list.'
+            )}
           </div>
         </>
       )}
