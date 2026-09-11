@@ -54,6 +54,36 @@ const AGENT_FIELDS_BARE = 'id name description tags endpoint pricePerCall payTo 
 const SITE_URL = process.env.SOVEREIGN_SITE_URL || 'https://sovereign-marketplace.vercel.app';
 
 /**
+ * The pairing written by `npx sovereign-mcp link --spend`.
+ *
+ * With this, paying needs no key on this machine: Sovereign signs the x402
+ * authorisation with the account's own delegated wallet, inside the buyer's
+ * spend policy, and only after the worker has quoted a price. The token is a
+ * bearer credential for that account, which is why link.js says so loudly and
+ * offers the .gitignore line.
+ */
+const LINK_TOKEN = process.env.SOVEREIGN_LINK_TOKEN || '';
+const LINKED_ACCOUNT = process.env.SOVEREIGN_ACCOUNT || '';
+
+/**
+ * Buy one call through the linked account.
+ *
+ * All the money logic lives server-side on purpose. The policy, the allowlist,
+ * the per-call ceiling and the listing's real price are things a buyer must be
+ * able to rely on even if this process is lying, so none of them are decided
+ * here -- this sends an id and an input and reports what came back.
+ */
+async function callViaAccount(agentId, input) {
+  const res = await fetch(`${SITE_URL}/api/agent/call`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${LINK_TOKEN}` },
+    body: JSON.stringify({ agentId, input }),
+  });
+  const data = await res.json().catch(() => ({}));
+  return { httpOk: res.ok, ...data };
+}
+
+/**
  * A link that carries this call's context into the Sovereign web app, so the
  * human does not retype what the agent already knows. Only `review` is issued
  * now: it prefills the grading modal after a payment has settled.
@@ -268,8 +298,9 @@ server.tool(
   'calling this unless they have already told you to go ahead, and check agent_profile first ' +
   'so you are not spending on an unproven worker without saying so. State `expectation` ' +
   'honestly before you see the result \u2014 the user grades the output against it and that ' +
-  'becomes the agent\'s permanent public record. Paying requires an agent key on this session; ' +
-  'without one this returns what the worker would cost and whether it is answering, and pays nothing.',
+  'becomes the agent\'s permanent public record. Paying requires this terminal to be paired ' +
+  '(`npx sovereign-mcp@latest link --spend`); without that this returns what the worker would ' +
+  'cost and whether it is answering, and pays nothing.',
   {
     agentId: z.string().describe('The id from search_agents / list_agents'),
     input: z.record(z.any()).describe('Input payload for the agent'),
@@ -286,6 +317,78 @@ server.tool(
     if (!a) return { content: [{ type: 'text', text: `No active agent with id "${agentId}".` }], isError: true };
     const want = (expectation || '').trim();
     const startedAt = Date.now();
+
+    // Preferred path: the account's own wallet, no key on this machine.
+    // Tried before the agent-key path because it is the one with the spend
+    // policy and the allowlist behind it -- a raw key on disk has neither.
+    if (LINK_TOKEN) {
+      let r;
+      try {
+        r = await callViaAccount(a.id, input);
+      } catch (e) {
+        return { content: [{ type: 'text', text:
+          `Could not reach Sovereign to pay for this call (${e.message}). Nothing was charged.` }], isError: true };
+      }
+      const latencyMs = Date.now() - startedAt;
+
+      if (r.error || (!r.ok && r.paid !== true)) {
+        const why = r.reason || r.error || 'the call failed';
+        const blocked = r.blockedBy === 'policy' || r.blockedBy === 'approval';
+        return { content: [{ type: 'text', text: [
+          `Agent: ${a.name} (${a.id}) — NOT HIRED. You were NOT charged.`,
+          `Reason: ${why}`,
+          blocked
+            ? `This was stopped by the buyer's own spend rules, not by the worker. Tell the`
+              + `\nuser what the limit was and let them change it in the Sovereign app; do not`
+              + `\nlook for another way to pay.`
+            : `Tell the user this worker did not deliver and offer search_agents to find`
+              + `\nanother one, or to do the job yourself.`,
+        ].join('\n') }] };
+      }
+
+      // Paid and nothing came back. The receipt is what stops the next buyer
+      // paying this worker for the same nothing.
+      if (r.paid === true && r.delivered === false) {
+        const reviewUrl = handoffLink('review', {
+          agentId: a.id, agentName: a.name,
+          amountUsdc: r.settlement?.amountUsdc ?? usdc(a.pricePerCall),
+          expectation: want,
+          settlementRef: r.settlement?.transaction || '',
+          latencyMs, delivered: false,
+        });
+        return { content: [{ type: 'text', text: [
+          `Agent: ${a.name} (${a.id}) — PAID ${r.settlement?.amountUsdc ?? '?'} USDC BUT NOTHING WAS DELIVERED.`,
+          `Reason: ${r.reason || 'no output'}`,
+          ``,
+          `Do NOT retry and do NOT pay again.`,
+          `FILE THE RECEIPT — opens the review prefilled as not delivered:`,
+          reviewUrl,
+        ].join('\n') }] };
+      }
+
+      const reviewUrl = handoffLink('review', {
+        agentId: a.id, agentName: a.name,
+        amountUsdc: r.settlement?.amountUsdc ?? '0',
+        expectation: want,
+        settlementRef: r.settlement?.transaction || '',
+        latencyMs, delivered: true,
+      });
+      const out = typeof r.output === 'string' ? r.output : JSON.stringify(r.output, null, 2);
+      return { content: [{ type: 'text', text: [
+        r.free
+          ? `Agent: ${a.name} (${a.id}) — answered WITHOUT charging. It is not x402-gated,`
+            + `\nso nothing was paid and this call leaves no receipt.`
+          : `Agent: ${a.name} (${a.id}) — PAID ${r.settlement.amountUsdc} USDC → ${r.settlement.payTo}`,
+        !r.free && r.settlement.transaction ? `Settlement: ${r.settlement.transaction}` : '',
+        `Took ${latencyMs}ms · track record: ${summarise(trackRecord(a))}`,
+        want ? `Expectation on record: "${want}"` : '',
+        ``,
+        `WORKER OUTPUT:\n${out}`,
+        ``,
+        r.free ? '' : `RATE THIS CALL — opens the review prefilled:\n${reviewUrl}`,
+        r.free ? '' : `Their rating is what the next buyer sees, so it is part of the job.`,
+      ].filter(Boolean).join('\n') }] };
+    }
 
     // Autonomous settle+call when the operator provisioned an agent key. The
     // x402 handshake (402 → sign → retry → 200) happens inside settleAndCall.
@@ -410,10 +513,10 @@ server.tool(
         `The worker is live and answered its paywall in ${latencyMs}ms, but this`,
         `session holds no agent key, so it cannot pay.`,
         ``,
-        `To hire it, give this session a funded Arc key:`,
-        `  SOVEREIGN_AGENT_KEY=0x...   (32-byte hex, in .mcp.json env)`,
-        `Then call_agent settles and calls in one step, and releases the money`,
-        `only if the worker answers.`,
+        `To hire it, pair this terminal with a Sovereign account:`,
+        `  npx sovereign-mcp@latest link --spend`,
+        `Then call_agent pays from that account's own wallet, inside its spend`,
+        `limits, and only after the worker has quoted a price.`,
         ``,
         `Tell the user that plainly. Do NOT suggest paying in the web app: a`,
         `transfer made there does not call the worker, so it can take the money`,
@@ -542,5 +645,11 @@ server.tool(
 await server.connect(new StdioServerTransport());
 console.error(
   'sovereign-mcp running (stdio). SUBGRAPH_URL ' + (SUBGRAPH_URL ? 'set' : 'NOT set') +
-  ' — payments: ' + (hasAutonomousKeys() ? 'ON (x402 via Circle Gateway)' : 'OFF (no SOVEREIGN_AGENT_KEY — discovery only, nothing can be hired)')
+  ' — payments: ' + (
+    LINK_TOKEN
+      ? `ON (x402 from linked account ${LINKED_ACCOUNT.slice(0, 6)}…${LINKED_ACCOUNT.slice(-4)})`
+      : hasAutonomousKeys()
+        ? 'ON (x402 via a local agent key)'
+        : 'OFF — run `npx sovereign-mcp@latest link --spend` to let this terminal pay'
+  )
 );

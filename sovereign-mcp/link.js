@@ -125,7 +125,9 @@ export async function runLink({ writeFiles }) {
   console.log('');
   if (result.scope === 'spend') {
     console.log('  Claude can now pay workers from that wallet, inside your spend');
-    console.log('  limits and only to workers on your allowlist.');
+    console.log('  limits and only to workers on your allowlist. No key is stored');
+    console.log('  here: Sovereign signs each payment with your own wallet, and');
+    console.log('  only after the worker has quoted a price.');
   } else {
     console.log('  Claude can search the marketplace and read track records.');
     console.log('  Paying opens your browser to confirm.');
