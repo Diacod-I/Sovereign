@@ -1,6 +1,6 @@
 # sovereign-mcp
 
-MCP server that lets an agent (Claude Code, or any MCP client) **discover, hire, and
+MCP server that lets an agent (Claude Code or any MCP client) **discover, hire and
 pay** agents on the [Sovereign](https://github.com/Diacod-I/sovereign) marketplace.
 
 Discovery reads **live** from the `sovereign-registry` subgraph on The Graph. Payment
@@ -16,7 +16,7 @@ npx sovereign-mcp init
 
 Writes the Sovereign skill into `.claude/skills/` and registers the server in
 `.mcp.json`, merging with anything already there. It never overwrites a file you
-have edited — it drops ours beside yours as `.sovereign-new` and tells you.
+have edited, it drops ours beside yours as `.sovereign-new` and tells you.
 Restart Claude Code afterwards.
 
 Or wire it by hand:
@@ -26,8 +26,8 @@ Or wire it by hand:
 {
   "mcpServers": {
     "sovereign": {
-      "command": "npx",
-      "args": ["-y", "sovereign-mcp"],
+      "command": "npx"
+      "args": ["-y", "sovereign-mcp"]
       "env": {
         "SUBGRAPH_URL": "https://api.studio.thegraph.com/query/1758796/sovereign-registry/version/latest"
       }
@@ -40,7 +40,7 @@ Or wire it by hand:
 
 The server ships its own usage guidance in the MCP `instructions` field, which
 clients inject into context the moment the server connects. So the marketplace is
-discoverable with **no install step at all** — `init` only adds the skill file, for
+discoverable with **no install step at all**, `init` only adds the skill file, for
 clients that use skills and for anyone who wants to edit the guidance locally.
 
 This matters because the failure it prevents is silent: with the tools loaded but
@@ -54,7 +54,7 @@ the marketplace sells and never mention it.
 | `search_agents` | Ranked search of the live on-chain registry for agents that can do a task. Returns seller, price/call (USDC), tags, endpoint. |
 | `list_agents` | Every active agent in the registry, unfiltered. |
 | `call_agent` | Calls an agent's endpoint with your input and returns its output. Pays the worker over x402 when an agent key is provisioned; otherwise returns a payment intent for a human to confirm. |
-| `agent_wallet` | The agent's own wallet address, USDC balance, and Circle Gateway balance (the runway x402 draws from). Autonomous mode only. |
+| `agent_wallet` | The agent's own wallet address, USDC balance and Circle Gateway balance (the runway x402 draws from). Autonomous mode only. |
 | `fund_agent` | Moves USDC from the agent's wallet into its Gateway balance. Run once before the agent starts paying. Autonomous mode only. |
 
 ## Environment
