@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import { usePrivy } from '@privy-io/react-auth';
 import { useRouter } from 'next/navigation';
@@ -9,7 +9,6 @@ import { useRouter } from 'next/navigation';
 import DepthCarousel from './components/DepthCarousel';
 import Brand from './components/Brand';
 import Copyable from './components/Copyable';
-import { gifDurationMs } from './lib/gifDuration';
 // PixelBlast is WebGL — load client-only so it mounts into a sized container (no blank SSR canvas)
 const PixelBlast = dynamic(() => import('./components/PixelBlast'), { ssr: false }) as any;
 
@@ -35,13 +34,14 @@ const CARD_W = 640;
 const CARD_H = 360;
 
 /**
- * Hold time for a card whose clip we could not measure.
+ * How long each card holds before autoplay moves on.
  *
- * Only reached when the GIF fails to load or is not parseable. Longer than any
- * of the short clips on purpose: cutting a clip off reads as a bug, holding a
- * still frame a moment too long reads as a pause.
+ * Long enough that the carousel reads as "showing you this" rather than as a
+ * slideshow you are chasing: a clip gets several passes, and anyone reading the
+ * feature text beside it is not interrupted. Picking a card restarts this, and
+ * hovering pauses it, so nobody is ever hurried off something they chose.
  */
-const FALLBACK_DWELL_MS = 4000;
+const SLOT_MS = 60000;
 
 export default function Home() {
   const { ready, authenticated, login } = usePrivy();
@@ -53,23 +53,6 @@ export default function Home() {
   // a plain page load, which is what keeps an already-signed-in visitor on the
   // landing page instead of being bounced to /dashboard the moment Privy hydrates.
   const [pending, setPending] = useState(false);
-
-  // One pass of each carousel clip, in ms, indexed like FEATURES. Measured from
-  // the files rather than hardcoded, so swapping a GIF changes the pacing
-  // without anyone having to remember to change a number here too. Null until
-  // measured, and null forever for anything unmeasurable.
-  const [clipMs, setClipMs] = useState<(number | null)[]>(() => FEATURES.map(() => null));
-
-  useEffect(() => {
-    let live = true;
-    Promise.all(FEATURES.map((f) => gifDurationMs(f.img).catch(() => null)))
-      .then((ds) => { if (live) setClipMs(ds); });
-    return () => { live = false; };
-  }, []);
-
-  // Stable across renders, so the carousel only re-arms its timer when the
-  // measurements actually land rather than on every slide change.
-  const dwell = useCallback((i: number) => clipMs[i] ?? FALLBACK_DWELL_MS, [clipMs]);
 
   // One destination now. There is no separate seller sign-up: buying and selling
   // are the same account, and the thing that used to divide them -- the World ID
@@ -201,15 +184,13 @@ export default function Home() {
               blur={5}
               autoplay
               loop
-              restartOnFocus
-              dwell={dwell}
               cardWidth={CARD_W}
               cardHeight={CARD_H}
               radius={18}
               tint="#05060a"
               duration={700}
               ease="power3.out"
-              autoplayDelay={FALLBACK_DWELL_MS}
+              autoplayDelay={SLOT_MS}
             />
           </div>
 

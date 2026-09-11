@@ -47,23 +47,6 @@ const DepthCarousel = forwardRef<any, any>(({
   ease = 'power3.out',
   autoplay = false,
   autoplayDelay = 3200,
-  /**
-   * How long to hold on card `i` before advancing, in ms. Return null/undefined
-   * to fall back to `autoplayDelay`. Exists so a card showing an animation can
-   * be held for exactly one pass of it rather than an arbitrary interval.
-   */
-  dwell = null,
-  /**
-   * Restart card `i`'s <img> from its first frame when it takes focus.
-   *
-   * A GIF in an <img> starts animating the moment it decodes and never stops,
-   * so by the time a card rotates into view its animation is already some way
-   * through a loop, and holding for one loop length would show the viewer the
-   * back half followed by the front half. Reassigning src is the only way to
-   * rewind one; the bytes come from cache, so this costs a decode, not a
-   * download.
-   */
-  restartOnFocus = false,
   loop = true,
   enableWheel = false,
   showControls = true,
@@ -90,11 +73,8 @@ const DepthCarousel = forwardRef<any, any>(({
   const wheelTimerRef = useRef(null);
   const autoTimerRef = useRef(null);
   const reducedRef = useRef(false);
-  const imgRefs = useRef([]);
-  const dwellRef = useRef(dwell);
-  dwellRef.current = dwell;
-  const restartOnFocusRef = useRef(restartOnFocus);
-  restartOnFocusRef.current = restartOnFocus;
+  /** Restarts the autoplay slot. Set by the autoplay effect, null when it is off. */
+  const armRef = useRef(null);
 
   const [active, setActive] = useState(0);
 
@@ -184,39 +164,11 @@ const DepthCarousel = forwardRef<any, any>(({
           const n = cfg.count;
           if (n > 0) posRef.current = ((posRef.current % n) + n) % n;
           layout(posRef.current);
-          // Rewound on arrival, not on departure. Restarting at the top of the
-          // tween would spend the first ~700ms of the clip sliding into place,
-          // which for a short one is most of it.
-          rewindRef.current?.(focusRef.current);
         }
       });
     },
     [layout]
   );
-
-  // tweenTo is defined above rewind and calls it on arrival; the ref breaks the
-  // cycle without reordering the file.
-  const rewindRef = useRef(null);
-
-  /**
-   * Send card `i`'s image back to its first frame.
-   *
-   * The cache-busting fragment is the trick: it changes the src, which is what
-   * makes the browser restart the animation, but it is a fragment, so the
-   * request URL is identical and the bytes come from the memory cache.
-   */
-  const rewind = useCallback(
-    index => {
-      if (!restartOnFocusRef.current) return;
-      const img = imgRefs.current[index];
-      if (!img) return;
-      const base = img.src.split('#')[0];
-      img.src = `${base}#t${Date.now()}`;
-    },
-    []
-  );
-
-  rewindRef.current = rewind;
 
   const setFocus = useCallback(
     (rawIndex, animate = true) => {
@@ -230,6 +182,9 @@ const DepthCarousel = forwardRef<any, any>(({
         if (delta > n / 2) delta -= n;
       }
       tweenTo(posRef.current + delta, animate);
+      // Outside the changed-index check on purpose: re-picking the card you are
+      // already on is still a request to sit on it, not a no-op.
+      armRef.current?.();
       if (idx !== focusRef.current) {
         focusRef.current = idx;
         notify(idx);
@@ -359,23 +314,18 @@ const DepthCarousel = forwardRef<any, any>(({
       if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
       autoTimerRef.current = null;
     };
-    // A chain of timeouts rather than one interval, because each card asks for
-    // its own hold time: with a fixed interval a 1.4s clip would sit on a dead
-    // frame for two seconds and a 22s one would be cut off a third of the way
-    // in. Rescheduling after every advance is also what keeps hover from
-    // dropping the viewer into the next card the instant they let go.
+    // A chain of timeouts rather than one interval, so that the clock can be
+    // restarted. With an interval, picking a card at the wrong moment gives you
+    // whatever was left of the previous card's slot -- click at 59s of a 60s
+    // slot and the thing you just chose slides away a second later. `arm` is
+    // published on a ref and called from setFocus, so any deliberate pick
+    // begins a fresh slot.
     const arm = () => {
       stop();
-      const i = focusRef.current;
-      const asked = typeof dwellRef.current === 'function' ? dwellRef.current(i) : null;
-      // The clip only starts once the card has landed, so the slide itself has
-      // to come out of the budget rather than out of the clip.
-      const ms = (Number.isFinite(asked) && asked > 0 ? asked : cfgRef.current.autoplayDelay)
-        + (restartOnFocusRef.current ? cfgRef.current.duration : 0);
       autoTimerRef.current = window.setTimeout(() => {
         if (hovered || focused) {
-          // Paused, not skipped. Poll instead of re-arming the whole dwell, or
-          // leaving a card would be followed by up to one more full clip of
+          // Paused, not skipped. Poll rather than re-arm the whole slot, or
+          // moving the pointer away would be followed by another full slot of
           // nothing happening.
           autoTimerRef.current = window.setTimeout(function tick() {
             if (hovered || focused) {
@@ -383,14 +333,13 @@ const DepthCarousel = forwardRef<any, any>(({
               return;
             }
             navigateBy(1);
-            arm();
           }, HOVER_POLL_MS);
           return;
         }
         navigateBy(1);
-        arm();
-      }, Math.max(ms, 600));
+      }, Math.max(cfgRef.current.autoplayDelay, 600));
     };
+    armRef.current = arm;
     const start = arm;
     const onEnter = () => {
       hovered = true;
@@ -411,16 +360,13 @@ const DepthCarousel = forwardRef<any, any>(({
     start();
     return () => {
       stop();
+      armRef.current = null;
       root?.removeEventListener('mouseenter', onEnter);
       root?.removeEventListener('mouseleave', onLeave);
       root?.removeEventListener('focusin', onFocusIn);
       root?.removeEventListener('focusout', onFocusOut);
     };
-    // `dwell` is in here so that measuring the clips after mount re-arms the
-    // timer with the real numbers instead of leaving the first card on the
-    // fallback. Pass a stable function (useCallback) or this effect will tear
-    // down and restart on every render.
-  }, [autoplay, autoplayDelay, count, navigateBy, dwell]);
+  }, [autoplay, autoplayDelay, count, navigateBy]);
 
   useEffect(() => {
     layout(posRef.current);
@@ -462,13 +408,7 @@ const DepthCarousel = forwardRef<any, any>(({
             aria-hidden={active !== i}
             onClick={() => onCardClick(i)}
           >
-            <img
-              className="depth-carousel__img"
-              ref={el => (imgRefs.current[i] = el)}
-              src={item.image}
-              alt={item.alt || ''}
-              draggable={false}
-            />
+            <img className="depth-carousel__img" src={item.image} alt={item.alt || ''} draggable={false} />
             <span
               className="depth-carousel__tint"
               ref={el => (overlayRefs.current[i] = el)}
