@@ -18,7 +18,29 @@ const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || '';
 
 export const kvConfigured = !!URL_ && !!TOKEN;
 
-const memory = new Map<string, string>();
+/**
+ * Whether anything may rely on storage surviving.
+ *
+ * Features that would strand a user halfway through (pairing a terminal, saving
+ * the limits that gate spending) refuse when this is false, rather than
+ * appearing to work and forgetting. The escape hatch is for a single long-lived
+ * process, where the in-memory map is genuinely durable enough; it is not for
+ * serverless, where it is not.
+ */
+export const storageUsable =
+  kvConfigured || process.env.SOVEREIGN_ALLOW_EPHEMERAL_LINKS === 'true';
+
+/**
+ * Stashed on globalThis, not in module scope.
+ *
+ * Next bundles each route separately, so a module-scope Map gives /api/policy
+ * and /api/agent/pay their OWN copies inside one process: a policy written by
+ * one is invisible to the other, and the failure looks like "no policy is set"
+ * rather than like a storage bug. One global makes the fallback at least
+ * coherent within a process, which is as far as it can honestly go.
+ */
+const globalStore = globalThis as unknown as { __sovereignKv?: Map<string, string> };
+const memory = (globalStore.__sovereignKv ??= new Map<string, string>());
 let warned = false;
 
 function warnOnce() {
@@ -26,8 +48,9 @@ function warnOnce() {
   warned = true;
   console.warn(
     '[kv] UPSTASH_REDIS_REST_URL / _TOKEN are not set — using an in-process Map.\n' +
-    '     Fine for local development. On a deployment this loses every hosted\n' +
-    '     worker on the next cold start.',
+    '     Fine for one long-lived process. On serverless this loses every hosted\n' +
+    '     worker, spend policy and pairing on the next cold start, and is not\n' +
+    '     shared between instances.',
   );
 }
 
