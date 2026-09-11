@@ -143,21 +143,10 @@ function rollDaily(p: SpendPolicy): SpendPolicy {
   return p.spentOn === today ? p : { ...p, spentToday: 0, spentOn: today };
 }
 
-// Governs every "Hire & pay" before the transfer signs.
-type PolicyVerdict =
-  | { ok: true; needsApproval: boolean }
-  | { ok: false; reason: string };
-
-function checkPolicy(policy: SpendPolicy, priceUsdc: number, payTo: string, allowlist: AllowEntry[]): PolicyVerdict {
-  if (policy.paused) return { ok: false, reason: 'Spending is paused — resume it on Overview.' };
-  const entry = allowlist.find((w) => w.address.toLowerCase() === payTo.toLowerCase());
-  if (!entry) return { ok: false, reason: 'This worker is not on your allowlist. Add it first.' };
-  if (entry.cap && priceUsdc > entry.cap) return { ok: false, reason: `Over this worker's per-call cap ($${entry.cap}).` };
-  if (priceUsdc > policy.perAction) return { ok: false, reason: `Over your per-action limit ($${policy.perAction}).` };
-  if (policy.spentToday + priceUsdc > policy.dailyBudget)
-    return { ok: false, reason: `Over your daily budget ($${policy.spentToday} of $${policy.dailyBudget} spent).` };
-  return { ok: true, needsApproval: priceUsdc >= policy.approvalThreshold };
-}
+// The buyer-side copy of the spend policy check used to live here, gating the
+// browser's "Hire & pay". That button is gone, and with it the only caller: the
+// policy is now enforced where the money actually moves, in policy.server.ts,
+// which a stolen token or a tampered localStorage cannot talk its way past.
 
 type Listing = {
   id: string;
@@ -469,15 +458,11 @@ export default function Dashboard() {
   const [allowlist, setAllowlist] = useState<AllowEntry[]>(INITIAL_ALLOWLIST);
   const [policyReady, setPolicyReady] = useState(false);
 
-  // marketplace "Hire & pay" + spend-policy enforcement
-  const [hireId, setHireId] = useState<string | null>(null);
   // Listing awaiting a per-call cap before it joins the allowlist.
   const [allowFor, setAllowFor] = useState<Listing | null>(null);
   // Paid calls the buyer has not graded yet.
   const [pending, setPending] = useState<PendingReview[]>([]);
   const [reviewing, setReviewing] = useState<PendingReview | null>(null);
-  // Expectation carried in from a Claude handoff link, prefilled into Hire & pay.
-  const [handoffExpectation, setHandoffExpectation] = useState('');
   const [handoffError, setHandoffError] = useState<string | null>(null);
   const [editPolicy, setEditPolicy] = useState(false);
   // This account's own verification, and every verified account on the marketplace.
@@ -608,11 +593,19 @@ export default function Dashboard() {
     handoffDone.current = true;
 
     if (h.kind === 'hire') {
+      // Older sovereign-mcp builds sent people here to pay by hand. That path is
+      // gone: a transfer made in this tab never called the worker, so it could
+      // take the money and return nothing. Paying now happens in the same breath
+      // as the call, in the terminal. Show the worker rather than a dead end.
       const listing = market.find((l) => l.id === h.agentId);
       if (listing) {
         setTab('marketplace');
-        setHandoffExpectation(h.expectation);
-        setHireId(listing.id);
+        setOpenId(listing.id);
+        setHandoffError(
+          `Claude sent you here to pay ${h.agentName} by hand. Paying from this page is no longer possible, ` +
+          `because a transfer made here does not call the worker — it could charge you for nothing. ` +
+          `Let the terminal pay: it only releases the money when the worker answers.`,
+        );
       } else {
         setHandoffError(`Claude referred you to "${h.agentName}", but it is not an active listing.`);
       }
@@ -719,34 +712,11 @@ export default function Dashboard() {
     return hash;
   };
 
-  // Buyer→seller settlement: native USDC value transfer on Arc, same
-  // signing path as withdraw. 18-dp here (native value).
-  // The HirePayModal enforces the spend policy before this runs. On
-  // success we roll spentToday forward.
-  const payWorker = async (l: Listing, expectation = ''): Promise<string> => {
-    if (!walletAddress) throw new Error('No wallet');
-    const base = parseUnits(l.price || '0', 18);
-    const { hash } = await sendTransaction(
-      { to: l.payTo, value: '0x' + base.toString(16), chainId: ARC_CHAIN_ID },
-      { address: walletAddress }
-    );
-    // Park the expectation against the payment tx. The receipt is filed later,
-    // once the work has actually come back, and the contract dedupes on this ref.
-    addPending({
-      settlementRef: hash,
-      agentId: l.id,
-      agentName: l.name,
-      amountUsdc: l.price || '0',
-      expectation,
-      hiredAt: Date.now(),
-      buyerAgentId: '',
-    });
-    setPending(readPending());
-    setPolicy((p) => ({ ...p, spentToday: +(p.spentToday + Number(l.price || 0)).toFixed(6), spentOn: utcDay() }));
-    reloadWallet();
-    return hash;
-  };
-  const hireListing = market.find((l) => l.id === hireId) || null;
+  // There is deliberately no pay-from-the-browser path any more. Sending USDC
+  // from this tab moved money without ever calling the worker's endpoint, so a
+  // broken worker could be paid in full and deliver nothing — which is exactly
+  // what happened. Payment belongs inside the call, where a failure can stop
+  // settlement, and that lives in sovereign-mcp.
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -764,6 +734,15 @@ export default function Dashboard() {
       {/* Main */}
       <main className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-4xl px-8 py-8">
+
+          {/* Above the tab switch, because a handoff from Claude can land the
+              buyer on any tab and the note explaining why is the first thing
+              they need to read. */}
+          {handoffError && (
+            <div className="mb-6 rounded-xl border border-amber-400/30 bg-amber-400/5 px-4 py-3 text-[11px] leading-relaxed text-amber-400">
+              {handoffError}
+            </div>
+          )}
 
           {tab === 'overview' && (
             <>
@@ -791,12 +770,6 @@ export default function Dashboard() {
                 />
                 <Stat label="Allowlisted workers" value={String(allowlist.length)} sub="with autopay" />
               </div>
-
-              {handoffError && (
-                <div className="mt-6 rounded-xl border border-amber-400/30 bg-amber-400/5 px-4 py-3 text-[11px] text-amber-400">
-                  {handoffError}
-                </div>
-              )}
 
               {pending.length > 0 && (
                 <div className="mt-6 rounded-xl border border-amber-400/30 bg-amber-400/5 p-5">
@@ -959,7 +932,6 @@ export default function Dashboard() {
                         >
                           {isAllowlisted(l.id) ? 'Allowlisted ✓' : 'Add to allowlist'}
                         </button>
-                        <button onClick={() => setHireId(l.id)} className="rounded-lg bg-accent px-3 py-1.5 text-sm text-black transition-opacity hover:opacity-90">Hire &amp; pay</button>
                       </div>
                     </div>
                     </div>
@@ -1030,12 +1002,6 @@ export default function Dashboard() {
               >
                 {isAllowlisted(openListing.id) ? 'Allowlisted ✓' : 'Add to allowlist'}
               </button>
-              <button
-                onClick={() => { const id = openListing.id; setOpenId(null); setHireId(id); }}
-                className="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90"
-              >
-                Hire &amp; pay
-              </button>
             </div>
           </div>
         </div>
@@ -1051,17 +1017,6 @@ export default function Dashboard() {
         <WithdrawModal address={walletAddress} balance={balance} onWithdraw={withdraw} onClose={() => setShowWithdraw(false)} />
       )}
 
-      {/* Hire & pay a worker, gated by the buyer spend policy */}
-      {hireListing && (
-        <HirePayModal
-          listing={hireListing}
-          policy={policy}
-          allowlist={allowlist}
-          onPay={payWorker}
-          initialExpectation={handoffExpectation}
-          onClose={() => { setHireId(null); setHandoffExpectation(''); }}
-        />
-      )}
       {reviewing && (
         <ReviewModal
           review={reviewing}
@@ -1722,128 +1677,6 @@ function WithdrawModal({
           <div className="mt-5 flex gap-3">
             <button disabled={!canSend} onClick={submit} className="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40">
               {busy ? 'Confirm in wallet…' : 'Withdraw'}
-            </button>
-            <button onClick={onClose} className="rounded-lg border border-hairline px-4 py-2.5 text-sm text-muted hover:text-foreground">Cancel</button>
-          </div>
-        </>
-      )}
-    </ModalShell>
-  );
-}
-
-// Hire a marketplace worker and settle in USDC on Arc, but only after the
-// account's spend policy clears. A call at/above the approval threshold needs an
-// explicit tick before it can send.
-function HirePayModal({
-  listing, policy, allowlist, onPay, onClose, initialExpectation,
-}: {
-  listing: Listing;
-  policy: SpendPolicy;
-  allowlist: AllowEntry[];
-  onPay: (l: Listing, expectation: string) => Promise<string>;
-  onClose: () => void;
-  /** Carried in from a Claude handoff link. */
-  initialExpectation?: string;
-}) {
-  const price = Number(listing.price || 0);
-  const [expectation, setExpectation] = useState(initialExpectation ?? '');
-  const [approved, setApproved] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [hash, setHash] = useState<string | null>(null);
-
-  const verdict: PolicyVerdict = checkPolicy(policy, price, listing.payTo, allowlist);
-  const needsApproval = verdict.ok && verdict.needsApproval;
-  const canPay = verdict.ok && !busy && (!needsApproval || approved);
-
-  const submit = async () => {
-    if (!canPay) return;
-    setErr(null);
-    setBusy(true);
-    try {
-      const h = await onPay(listing, expectation.trim());
-      setHash(h);
-    } catch (e: any) {
-      setErr(e?.message ? String(e.message) : 'Transaction failed or was rejected.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <ModalShell onClose={onClose}>
-      <h2 className="text-lg font-semibold tracking-tight">Hire &amp; pay</h2>
-      {hash ? (
-        <>
-          <div className="mt-4 flex items-center gap-2 rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 text-sm text-accent">
-            <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent" />
-            Paid {formatUsdc(price)} USDC to {listing.name}
-          </div>
-          <p className="mt-3 text-sm text-muted">To <span className="font-mono">{shortHash(listing.payTo)}</span>. Both dashboards update shortly.</p>
-          <a href={txUrl(hash)} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 font-mono text-xs text-muted underline-offset-2 hover:text-foreground hover:underline">
-            View on Arcscan <ArrowUpRight />
-          </a>
-          {expectation.trim() && (
-            <div className="mt-4 rounded-lg border border-hairline bg-background p-3">
-              <div className="text-[10px] uppercase tracking-wider text-muted">You asked for</div>
-              <div className="mt-1 text-[11px] leading-relaxed">{expectation.trim()}</div>
-              <div className="mt-2 text-[10px] leading-relaxed text-muted">
-                Once your agent has the result, grade it under “Awaiting your review” on Overview.
-              </div>
-            </div>
-          )}
-          <button onClick={onClose} className="mt-5 w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black">Done</button>
-        </>
-      ) : (
-        <>
-          <p className="mt-1 text-sm text-muted">A real USDC transfer on Arc from your treasury to the worker&apos;s payout address.</p>
-          <div className="mt-4 rounded-lg border border-hairline bg-background p-3 text-sm">
-            <div className="flex items-center justify-between"><span className="text-muted">Worker</span><span>{listing.name}</span></div>
-            <div className="mt-1 flex items-center justify-between"><span className="text-muted">Pays to</span><span className="font-mono text-xs">{shortHash(listing.payTo)}</span></div>
-            <div className="mt-1 flex items-center justify-between"><span className="text-muted">Price</span><span className="font-mono">{listing.price} USDC</span></div>
-          </div>
-
-          <div className="mt-2 text-[11px] text-muted">
-            per-action ${policy.perAction} · today ${policy.spentToday}/${policy.dailyBudget} · approval over ${policy.approvalThreshold}
-          </div>
-
-          {/* Stated before paying, on purpose: grading against a commitment you
-              wrote down first is what makes "did it meet expectations" a real
-              question rather than a mood. It is stored with the receipt. */}
-          <label className="mt-4 block text-sm">
-            <span className="text-muted">What do you expect back?</span>
-            <textarea
-              value={expectation}
-              onChange={(e) => setExpectation(e.target.value)}
-              rows={2}
-              maxLength={400}
-              placeholder="e.g. a risk score for this address with the sanctions sources it checked"
-              className="mt-1 w-full resize-none rounded-lg border border-hairline bg-background px-3 py-2 text-sm outline-none focus:border-accent"
-            />
-            <span className="mt-1 block text-[10px] text-muted">
-              {initialExpectation
-                ? 'Carried over from your agent — edit it if that is not what you wanted.'
-                : 'You\u2019ll grade the result against this. It goes on-chain with your review.'}
-            </span>
-          </label>
-
-          {!verdict.ok && (
-            <div className="mt-3 flex items-center gap-2 rounded-lg border border-red-400/30 bg-red-400/5 px-3 py-2 text-[11px] text-red-400">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-red-400" />
-              Blocked by policy — {verdict.reason}
-            </div>
-          )}
-          {needsApproval && (
-            <label className="mt-3 flex items-start gap-2 rounded-lg border border-hairline bg-background px-3 py-2 text-[11px] text-muted">
-              <input type="checkbox" checked={approved} onChange={(e) => setApproved(e.target.checked)} className="mt-0.5" />
-              This call is at or above your approval threshold. I approve this spend.
-            </label>
-          )}
-          {err && <div className="mt-3 rounded-lg border border-red-400/30 bg-red-400/5 px-3 py-2 text-[11px] text-red-400">{err}</div>}
-
-          <div className="mt-5 flex gap-3">
-            <button disabled={!canPay} onClick={submit} className="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40">
-              {busy ? 'Confirm in wallet…' : `Pay ${listing.price} USDC`}
             </button>
             <button onClick={onClose} className="rounded-lg border border-hairline px-4 py-2.5 text-sm text-muted hover:text-foreground">Cancel</button>
           </div>
