@@ -501,7 +501,7 @@ export default function SellerDashboard() {
                               >
                                 <div className="relative">
                                   <Cover name={a.name} className="h-14 overflow-hidden" />
-                                  <div className="absolute right-2 top-2 rounded-full bg-black/55 px-2 py-0.5 backdrop-blur-sm">
+                                  <div className="absolute pb-2 right-1 rounded-full bg-black/55 px-2 py-0.5 backdrop-blur-sm">
                                     <Pill kind={a.active ? 'active' : 'paused'} />
                                   </div>
                                 </div>

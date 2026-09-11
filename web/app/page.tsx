@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useState, useEffect } from 'react';
+import { useCallback, useRef, useState, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import { usePrivy } from '@privy-io/react-auth';
 import { useRouter } from 'next/navigation';
@@ -9,17 +9,39 @@ import { useRouter } from 'next/navigation';
 import DepthCarousel from './components/DepthCarousel';
 import Brand from './components/Brand';
 import Copyable from './components/Copyable';
+import { gifDurationMs } from './lib/gifDuration';
 // PixelBlast is WebGL — load client-only so it mounts into a sized container (no blank SSR canvas)
 const PixelBlast = dynamic(() => import('./components/PixelBlast'), { ssr: false }) as any;
 
 const FEATURES = [
-  { n: '01', t: 'Set the rules once', d: 'Give each agent a budget, an allowlist, and an approval threshold.', img: '/features/rules.gif' },
+  { n: '01', t: 'Set the rules once', d: 'Give each agent a budget, an allowlist, and an approval threshold.', img: '/hero_gif_1.gif' },
   { n: '02', t: 'Agents pay on their own', d: 'They find services and pay per use in USDC — always within your limits.', img: '/features/pay.gif' },
   { n: '03', t: 'Big spends wait for you', d: 'Anything over the line pauses for a one-tap human approval.', img: '/features/approve.gif' },
   { n: '04', t: 'Everything is on record', d: 'Reputation and audit live on-chain, not in a black box.', img: '/features/audit.gif' },
 ];
 
 const carousel_items = FEATURES.map((f) => ({ image: f.img, alt: f.t }));
+
+/**
+ * Card size for the "how it works" carousel.
+ *
+ * Exactly half of the 1280x720 source GIFs: the aspect ratio matches, so the
+ * card's `object-fit: cover` has nothing to crop off the sides, and the halving
+ * puts a source pixel on a whole device pixel at 2x. The carousel scales this
+ * down to fit its column, so treat it as an upper bound rather than the rendered
+ * size.
+ */
+const CARD_W = 640;
+const CARD_H = 360;
+
+/**
+ * Hold time for a card whose clip we could not measure.
+ *
+ * Only reached when the GIF fails to load or is not parseable. Longer than any
+ * of the short clips on purpose: cutting a clip off reads as a bug, holding a
+ * still frame a moment too long reads as a pause.
+ */
+const FALLBACK_DWELL_MS = 4000;
 
 export default function Home() {
   const { ready, authenticated, login } = usePrivy();
@@ -31,6 +53,23 @@ export default function Home() {
   // a plain page load, which is what keeps an already-signed-in visitor on the
   // landing page instead of being bounced to /dashboard the moment Privy hydrates.
   const [pending, setPending] = useState(false);
+
+  // One pass of each carousel clip, in ms, indexed like FEATURES. Measured from
+  // the files rather than hardcoded, so swapping a GIF changes the pacing
+  // without anyone having to remember to change a number here too. Null until
+  // measured, and null forever for anything unmeasurable.
+  const [clipMs, setClipMs] = useState<(number | null)[]>(() => FEATURES.map(() => null));
+
+  useEffect(() => {
+    let live = true;
+    Promise.all(FEATURES.map((f) => gifDurationMs(f.img).catch(() => null)))
+      .then((ds) => { if (live) setClipMs(ds); });
+    return () => { live = false; };
+  }, []);
+
+  // Stable across renders, so the carousel only re-arms its timer when the
+  // measurements actually land rather than on every slide change.
+  const dwell = useCallback((i: number) => clipMs[i] ?? FALLBACK_DWELL_MS, [clipMs]);
 
   // One destination now. There is no separate seller sign-up: buying and selling
   // are the same account, and the thing that used to divide them -- the World ID
@@ -135,62 +174,67 @@ export default function Home() {
             </div>
           </div>
         </section>
-
-        {/* How it works — carousel left (bigger), features synced on the right */}
-        <section id="how" className="border-t border-hairline py-20">
-          <div className="grid items-center gap-10 lg:grid-cols-[3fr_2fr]">
-
-            {/* Left: carousel */}
-            <div className="relative h-[420px] w-full sm:h-[520px]">
-              <DepthCarousel
-                ref={carouselRef}
-                items={carousel_items}
-                showControls={false}
-                showIndicators={false}
-                onChange={(i: number) => setActive(i)}
-                depth={240}
-                spread={80}
-                tilt={18}
-                tiltDirection="right"
-                perspective={1500}
-                visibleCards={3}
-                falloff={0.18}
-                blur={5}
-                autoplay
-                loop
-                cardWidth={460}
-                cardHeight={300}
-                radius={18}
-                tint="#05060a"
-                duration={700}
-                ease="power3.out"
-                autoplayDelay={3600}
-              />
-            </div>
-
-            {/* Right: feature list synced to the active card */}
-            <div className="flex flex-col gap-1.5">
-              {FEATURES.map((f, i) => {
-                const on = i === active;
-                return (
-                  <button
-                    key={f.n}
-                    onClick={() => carouselRef.current?.setFocus(i)}
-                    aria-current={on}
-                    className={`flex gap-4 rounded-xl border px-5 py-4 text-left transition-colors ${on ? 'border-hairline bg-panel' : 'border-transparent hover:bg-panel'}`}
-                  >
-                    <span className={`pt-0.5 font-mono text-xs ${on ? 'text-accent' : 'text-muted'}`}>{f.n}</span>
-                    <div>
-                      <h3 className={`text-[15px] font-semibold tracking-tight ${on ? 'text-foreground' : 'text-muted'}`}>{f.t}</h3>
-                      <p className={`mt-1.5 text-sm leading-relaxed text-muted ${on ? 'opacity-100' : 'opacity-60'}`}>{f.d}</p>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </section>
       </main>
+
+      {/* How it works — carousel left (bigger), features synced on the right.
+          This section breaks out of the page's max-w-5xl on its own: the cards
+          are 1280x720 screen recordings, and at the body width they render
+          small enough that you cannot read the UI inside them. */}
+      <section id="how" className="border-t border-hairline py-20">
+        <div className="mx-auto grid max-w-6xl items-center gap-10 px-6 lg:grid-cols-[7fr_4fr]">
+
+          {/* Left: carousel */}
+          <div className="relative h-[300px] w-full sm:h-[460px] lg:h-[560px]">
+            <DepthCarousel
+              ref={carouselRef}
+              items={carousel_items}
+              showControls={false}
+              showIndicators={false}
+              onChange={(i: number) => setActive(i)}
+              depth={240}
+              spread={48}
+              tilt={18}
+              tiltDirection="right"
+              perspective={1500}
+              visibleCards={3}
+              falloff={0.18}
+              blur={5}
+              autoplay
+              loop
+              restartOnFocus
+              dwell={dwell}
+              cardWidth={CARD_W}
+              cardHeight={CARD_H}
+              radius={18}
+              tint="#05060a"
+              duration={700}
+              ease="power3.out"
+              autoplayDelay={FALLBACK_DWELL_MS}
+            />
+          </div>
+
+          {/* Right: feature list synced to the active card */}
+          <div className="flex flex-col gap-1.5">
+            {FEATURES.map((f, i) => {
+              const on = i === active;
+              return (
+                <button
+                  key={f.n}
+                  onClick={() => carouselRef.current?.setFocus(i)}
+                  aria-current={on}
+                  className={`flex gap-4 rounded-xl border px-5 py-4 text-left transition-colors ${on ? 'border-hairline bg-panel' : 'border-transparent hover:bg-panel'}`}
+                >
+                  <span className={`pt-0.5 font-mono text-xs ${on ? 'text-accent' : 'text-muted'}`}>{f.n}</span>
+                  <div>
+                    <h3 className={`text-[15px] font-semibold tracking-tight ${on ? 'text-foreground' : 'text-muted'}`}>{f.t}</h3>
+                    <p className={`mt-1.5 text-sm leading-relaxed text-muted ${on ? 'opacity-100' : 'opacity-60'}`}>{f.d}</p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </section>
 
       <footer className="mx-auto max-w-5xl px-6 pb-10">
         <div className="flex flex-col gap-3 border-t border-hairline pt-6 text-xs text-muted sm:flex-row sm:items-center sm:justify-between">
