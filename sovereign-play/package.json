@@ -1,0 +1,25 @@
+{
+  "name": "sovereign-play",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A one-button wall-jump climber for your terminal, to play while Claude Code works.",
+  "bin": {
+    "sovereign-play": "index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "test": "node test/engine.test.mjs && node test/signal.test.mjs && node test/net.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "index.js",
+    "game.js",
+    "net.js",
+    "hooks",
+    "scripts",
+    "README.md"
+  ]
+}

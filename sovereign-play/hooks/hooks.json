@@ -1,0 +1,18 @@
+{
+  "description": "Ends a running sovereign-play match when Claude finishes a turn.",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/signal-done.sh",
+            "args": [],
+            "timeout": 5,
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}
