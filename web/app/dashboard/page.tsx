@@ -16,7 +16,15 @@ import OnboardingCard from '../components/Onboarding';
 import { useEmbeddedWallet } from '../lib/useEmbeddedWallet';
 import { readProfile } from '../lib/profile';
 import { displayName, type PublicProfile } from '../lib/directory';
-import { approveData, depositData, gatewayAvailable, GATEWAY } from '../lib/gateway';
+import {
+  APPROVAL_HEADROOM_USDC,
+  approveData,
+  depositData,
+  gatewayAllowance,
+  gatewayAvailable,
+  GATEWAY,
+} from '../lib/gateway';
+import { withoutHidden } from '../lib/curation';
 import { useDirectory } from '../lib/useDirectory';
 import { readVerification, mergeVerification, type SellerVerification } from '../lib/world';
 import { fetchVerification, useVerified } from '../lib/verification';
@@ -496,6 +504,17 @@ export default function Dashboard() {
   // which the card must not render as zero.
   const [gatewayBalance, setGatewayBalance] = useState<number | null>(null);
   const [gatewayNonce, setGatewayNonce] = useState(0);
+  /** Which wallet prompt the user is looking at, so the button can name it. */
+  const [fundStep, setFundStep] = useState<'approving' | 'depositing' | null>(null);
+  /** Null until read. Decides whether topping up needs one prompt or two. */
+  const [allowance, setAllowance] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!walletAddress) return;
+    let alive = true;
+    gatewayAllowance(ARC_RPC_URL, walletAddress).then((v) => { if (alive) setAllowance(v); });
+    return () => { alive = false; };
+  }, [walletAddress, gatewayNonce]);
   const reloadGateway = useCallback(() => setGatewayNonce((n) => n + 1), []);
 
   useEffect(() => {
@@ -724,13 +743,17 @@ export default function Dashboard() {
   const removeWl = (id: string) => setAllowlist((list) => list.filter((w) => w.id !== id));
 
   const openListing = market.find((l) => l.id === openId) || null;
-  const filtered = market.filter((l) => {
+  // Curated before anything else. A listing this deployment declines to serve
+  // should not be findable by search either, or the search box becomes the way
+  // around the decision.
+  const servable = withoutHidden(market);
+  const filtered = servable.filter((l) => {
     if (verifiedOnly && !isVerifiedOwner(l.owner)) return false;
     return (l.name + ' ' + l.summary + ' ' + l.tags + ' ' + l.owner)
       .toLowerCase()
       .includes(q.trim().toLowerCase());
   });
-  const verifiedCount = market.filter((l) => isVerifiedOwner(l.owner)).length;
+  const verifiedCount = servable.filter((l) => isVerifiedOwner(l.owner)).length;
   const isAllowlisted = (id: string) => allowlist.some((w) => w.listingId === id);
 
   /** Asks for a per-call cap before trusting a worker, rather than assuming one. */
@@ -753,24 +776,51 @@ export default function Dashboard() {
   /**
    * Move USDC from the treasury into Gateway, so agents can spend it.
    *
-   * Two transactions, and the approval is not skipped when one already exists
-   * because reading the allowance costs a round trip to decide something the
-   * chain will decide anyway -- a redundant approve is cheap, a deposit that
-   * reverts for want of one is a confusing failure. They are sent in order and
-   * the second is only sent if the first was accepted.
+   * ERC-20 makes this two transactions the first time and there is no way
+   * around it here: GatewayWallet has no permit or receiveWithAuthorization, so
+   * `deposit` can only move tokens an allowance already covers, and this Privy
+   * version has no EIP-5792 batching to fold the pair into one confirmation.
+   *
+   * What we can do is stop charging for it twice. The allowance is read first,
+   * and when it already covers the amount only the deposit is sent, which is
+   * one prompt. When it does not, the approval asks for headroom rather than
+   * the exact amount, so the next several top-ups are also one prompt.
+   *
+   * A failed allowance read approves rather than assuming: guessing wrong the
+   * optimistic way costs a prompt AND a gas fee to discover a revert.
    */
   const fundGateway = async (amount: string): Promise<void> => {
     if (!walletAddress) throw new Error('No wallet');
-    await sendTransaction(
-      { to: GATEWAY.usdc, data: approveData(amount), chainId: ARC_CHAIN_ID },
-      { address: walletAddress },
-    );
-    await sendTransaction(
-      { to: GATEWAY.wallet, data: depositData(amount), chainId: ARC_CHAIN_ID },
-      { address: walletAddress },
-    );
-    reloadWallet();
-    reloadGateway();
+    const want = Number(amount);
+    const current = await gatewayAllowance(ARC_RPC_URL, walletAddress);
+
+    try {
+      if (current === null || current < want) {
+        setFundStep('approving');
+        await sendTransaction(
+          {
+            to: GATEWAY.usdc,
+            data: approveData(String(Math.max(want, APPROVAL_HEADROOM_USDC))),
+            chainId: ARC_CHAIN_ID,
+          },
+          { address: walletAddress },
+        );
+      }
+
+      setFundStep('depositing');
+      await sendTransaction(
+        { to: GATEWAY.wallet, data: depositData(amount), chainId: ARC_CHAIN_ID },
+        { address: walletAddress },
+      );
+    } finally {
+      // Cleared even when a prompt is rejected, or the button keeps claiming to
+      // be waiting on a confirmation that is no longer coming. Refreshed on the
+      // way out too: an approval that landed before the deposit was rejected
+      // still changed the allowance, and the next attempt should know.
+      setFundStep(null);
+      reloadWallet();
+      reloadGateway();
+    }
   };
   // Native USDC transfer signed by the embedded wallet on Arc. Arc's native value
   // fields are 18-decimal wei, so encode with parseUnits (exact BigInt, no float).
@@ -886,6 +936,8 @@ export default function Dashboard() {
 
               <AgentFunds
                 available={gatewayBalance}
+                allowance={allowance}
+                step={fundStep}
                 onFund={fundGateway}
                 onRefresh={reloadGateway}
                 hasWallet={!!walletAddress}
@@ -940,7 +992,7 @@ export default function Dashboard() {
                   </div>
                   <p className="mt-6 text-sm text-muted">Workers published by this wallet</p>
                   <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                    {market.filter((l) => l.owner === sellerId).map((l) => (
+                    {servable.filter((l) => l.owner === sellerId).map((l) => (
                       <div key={l.id} className="overflow-hidden rounded-xl border border-hairline bg-panel">
                         <Cover name={l.name} />
                         <div className="p-5">
@@ -987,8 +1039,8 @@ export default function Dashboard() {
               </div>
               {marketLoading && <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-muted">Loading workers from the subgraph…</div>}
               {!marketLoading && marketError && <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-red-400">{marketError}</div>}
-              {!marketLoading && !marketError && market.length === 0 && <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-muted">No workers registered on-chain yet.</div>}
-              {!marketLoading && !marketError && market.length > 0 && filtered.length === 0 && (
+              {!marketLoading && !marketError && servable.length === 0 && <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-muted">No workers registered on-chain yet.</div>}
+              {!marketLoading && !marketError && servable.length > 0 && filtered.length === 0 && (
                 <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-muted">
                   {verifiedOnly && !q.trim()
                     ? 'No listings yet from sellers who have proved they are a unique human.'
@@ -1808,9 +1860,12 @@ function WithdrawModal({
  * why this does not offer a button for it.
  */
 function AgentFunds({
-  available, onFund, onRefresh, hasWallet,
+  available, allowance, step, onFund, onRefresh, hasWallet,
 }: {
   available: number | null;
+  /** USDC the Gateway contract may already take. Null if unread. */
+  allowance: number | null;
+  step: 'approving' | 'depositing' | null;
   onFund: (amount: string) => Promise<void>;
   onRefresh: () => void;
   hasWallet: boolean;
@@ -1819,6 +1874,12 @@ function AgentFunds({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
+
+  // How many wallet prompts this will cost, worked out before they commit
+  // rather than discovered halfway through. An unread allowance counts as two,
+  // because that is what the code will do.
+  const needsApproval = allowance === null || allowance < (Number(amount) || 0);
+  const prompts = needsApproval ? 2 : 1;
 
   const fund = async () => {
     const n = Number(amount);
@@ -1890,13 +1951,28 @@ function AgentFunds({
             onClick={fund}
             className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40"
           >
-            {busy ? 'Confirm both in wallet…' : 'Move across'}
+            {!busy
+              ? `Move across${prompts === 2 ? ' (2 confirmations)' : ''}`
+              : step === 'approving'
+                ? 'Confirm the approval…'
+                : step === 'depositing'
+                  ? 'Confirm the transfer…'
+                  : 'Working…'}
           </button>
           <button onClick={() => { setOpen(false); setErr(null); }} className="text-sm text-muted hover:text-foreground">
             Cancel
           </button>
-          <span className="w-full text-[10px] text-muted">
-            Two transactions: one to allow the Gateway contract to take it, one to deposit.
+          <span className="w-full text-[10px] leading-relaxed text-muted">
+            {needsApproval ? (
+              <>
+                Two confirmations this time: one allowing the Gateway contract to take
+                USDC, one moving it. The allowance is set to $
+                {Math.max(Number(amount) || 0, APPROVAL_HEADROOM_USDC)} rather than
+                just this amount, so later top-ups take a single confirmation.
+              </>
+            ) : (
+              <>One confirmation. The Gateway contract is already allowed to take up to ${allowance}.</>
+            )}
           </span>
         </div>
       ) : (
