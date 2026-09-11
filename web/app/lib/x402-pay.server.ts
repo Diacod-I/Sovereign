@@ -23,6 +23,8 @@
 // this way, and the error for that is worth reading rather than guessing at.
 
 import { delegationProblem, SERVER_MAX_PER_CALL } from './delegate.server';
+import { gatewayAvailable } from './gateway';
+import { ARC_RPC_URL } from './arc';
 
 const APP_ID = process.env.NEXT_PUBLIC_PRIVY_APP_ID || '';
 const APP_SECRET = process.env.PRIVY_APP_SECRET || '';
@@ -261,6 +263,25 @@ export async function payAndCall(args: {
   if (asked > SERVER_MAX_PER_CALL) {
     throw new NotPaidError(
       `Refused: ${SERVER_MAX_PER_CALL} USDC is the hard per-call ceiling on this server.`,
+    );
+  }
+
+  // Checked BEFORE signing, because signing does not check it.
+  //
+  // A Gateway authorization is just a signature; nothing verifies the balance
+  // until the facilitator tries to settle. So an empty spending balance used to
+  // surface as the worker rejecting a paid request, which reads as the worker
+  // being broken and leaves the caller unable to say whether money moved. It is
+  // the single most likely first-run failure and it deserves its own sentence.
+  //
+  // A balance that cannot be read is not treated as empty: the RPC being down
+  // is not a reason to refuse a payment that would have worked.
+  const funded = await gatewayAvailable(ARC_RPC_URL, args.account);
+  if (funded !== null && funded < asked) {
+    throw new NotPaidError(
+      `Not enough in the agent spending balance: this call costs ${asked} USDC and ` +
+      `${funded} is available. This is separate from the treasury, so a funded wallet ` +
+      `can still be empty here. Top it up under "Agent spending balance" on Overview.`,
     );
   }
 

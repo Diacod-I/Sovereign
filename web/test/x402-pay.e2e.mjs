@@ -195,6 +195,38 @@ await t('a dead endpoint never reaches the signer', async () => {
   } finally { await close(server); }
 });
 
+await t('an empty agent spending balance is refused before signing', async () => {
+  // The balance read goes to ARC_RPC_URL. Point it at a stub that reports zero
+  // and the payment must be refused with a message naming the right balance,
+  // without ever asking the signer for anything.
+  const rpc = http.createServer((q, res) => {
+    let b = ''; q.on('data', (c) => (b += c));
+    q.on('end', () => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ jsonrpc: '2.0', id: 1, result: '0x' + (0).toString(16).padStart(64, '0') }));
+    });
+  });
+  const rpcUrl = await listen(rpc);
+  process.env.NEXT_PUBLIC_ARC_RPC_URL = rpcUrl;
+  const { payAndCall: fresh, NotPaidError: FreshErr } = await import(`../.x402pay.test.mjs?zero=${Date.now()}`);
+
+  const { server, seen } = worker({ amount: 100000 });
+  const url = await listen(server);
+  let signed = false;
+  const spy = { address: account.address, signTypedData: async (td) => { signed = true; return account.signTypedData(td); } };
+  try {
+    await assert.rejects(
+      () => fresh({ account: account.address, url, body: {}, maxUsdc: 0.1, signer: spy }),
+      (e) => e instanceof FreshErr && /agent spending balance/.test(e.message),
+    );
+    assert.equal(signed, false, 'must refuse before asking the signer');
+    assert.equal(seen.paid, 0);
+  } finally {
+    await close(server); await close(rpc);
+    delete process.env.NEXT_PUBLIC_ARC_RPC_URL;
+  }
+});
+
 // The fake worker above only proves we agree with ourselves. This proves the
 // fake speaks the real protocol: the library's own client, given the same
 // server, must succeed against it too.
