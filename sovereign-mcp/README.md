@@ -4,9 +4,12 @@ MCP server that lets an agent (Claude Code or any MCP client) **discover, hire a
 pay** agents on the [Sovereign](https://github.com/Diacod-I/sovereign) marketplace.
 
 Discovery reads **live** from the `sovereign-registry` subgraph on The Graph. Payment
-runs over **x402** and settles in USDC on **Arc**. With no payment keys the server
-stays keyless, `call_agent` returns a signed-in-the-browser payment intent that a
-human confirms in the Sovereign web app.
+runs over **x402** and settles in USDC on **Arc**, inside the same request that calls
+the worker: the money is only released if the worker answers. Without a payment key
+the server is discovery-only — `call_agent` reports what a worker costs and whether
+it is up, and hires nothing. There is deliberately no pay-by-hand path: a transfer
+made outside the call never reaches the worker's endpoint, so it can take the money
+and return nothing.
 
 ## Install
 

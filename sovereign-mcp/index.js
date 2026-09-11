@@ -55,9 +55,15 @@ const SITE_URL = process.env.SOVEREIGN_SITE_URL || 'https://sovereign-marketplac
 
 /**
  * A link that carries this call's context into the Sovereign web app, so the
- * human does not retype what the agent already knows. `hire` prefills the
- * payment modal with the stated expectation; `review` prefills the grading
- * modal after an autonomous payment has settled.
+ * human does not retype what the agent already knows. Only `review` is issued
+ * now: it prefills the grading modal after a payment has settled.
+ *
+ * There used to be a `hire` link as well, sent whenever this session could not
+ * pay for itself. It was a mistake. It invited the human to transfer USDC from
+ * the web app, and that transfer never called the worker — so a worker whose
+ * endpoint was returning 404 could be paid in full and deliver nothing, with
+ * both sides believing the other had done its half. Payment is only safe as
+ * part of the call, where a failure can stop settlement.
  */
 function handoffLink(kind, payload) {
   const json = JSON.stringify({ v: 1, ...payload });
@@ -130,10 +136,10 @@ function describe(a) {
   ].join('\n');
 }
 
-const ARC_CHAIN_ID = Number(process.env.ARC_CHAIN_ID || 5042002);
-
-// Best-effort call to a worker's HTTP endpoint. Placeholder / unreachable URLs fail
-// softly so discovery + the payment intent still come back.
+// A free, unpaid probe of a worker's HTTP endpoint. Placeholder or unreachable
+// URLs fail softly so discovery still works. Nothing this learns may be turned
+// into an invitation to pay by hand: an endpoint that did not answer is an
+// endpoint that must not be paid.
 async function invokeWorker(endpoint, input) {
   if (!endpoint || !/^https?:\/\//i.test(endpoint) || /your-host|example\.com/i.test(endpoint)) {
     return { ok: false, note: 'endpoint is a placeholder — not called' };
@@ -155,20 +161,6 @@ async function invokeWorker(endpoint, input) {
   } catch (e) {
     return { ok: false, note: `endpoint unreachable: ${e.message}` };
   }
-}
-
-// The structured settlement the human confirms in the web app.
-function paymentIntent(a) {
-  return {
-    type: 'sovereign.payment_intent',
-    agentId: a.id,
-    amount: usdc(a.pricePerCall),
-    asset: 'USDC',
-    payTo: a.payTo,
-    chainId: ARC_CHAIN_ID,
-    seller: a.owner,
-    memo: `sovereign:call_agent:${a.id}`,
-  };
 }
 
 /**
@@ -215,6 +207,14 @@ HOW TO USE IT
    unless they already said to go ahead. State the expectation honestly BEFORE
    seeing the result; the user grades the output against it and that becomes the
    agent's permanent public record.
+
+PAYING IS PART OF THE CALL
+call_agent pays and calls in one step, and releases the money only if the worker
+answers. There is no other way to buy a call. If it reports that this session
+cannot pay, or that a worker's endpoint is down, say so and stop — NEVER tell the
+user to go and pay in the web app or send USDC to the worker's payout address. A
+transfer made outside call_agent does not reach the worker's endpoint, so it can
+take their money and return nothing.
 
 TELLING THE USER
 Always report what you found, even when you decide to do the work yourself:
@@ -268,8 +268,8 @@ server.tool(
   'calling this unless they have already told you to go ahead, and check agent_profile first ' +
   'so you are not spending on an unproven worker without saying so. State `expectation` ' +
   'honestly before you see the result \u2014 the user grades the output against it and that ' +
-  'becomes the agent\'s permanent public record. In keyless mode nothing is paid here: you get ' +
-  'a link that opens the Sovereign web app with the payment and expectation prefilled.',
+  'becomes the agent\'s permanent public record. Paying requires an agent key on this session; ' +
+  'without one this returns what the worker would cost and whether it is answering, and pays nothing.',
   {
     agentId: z.string().describe('The id from search_agents / list_agents'),
     input: z.record(z.any()).describe('Input payload for the agent'),
@@ -387,45 +387,68 @@ server.tool(
       if (why) autonomousNote = `(keyless mode — ${why})\n\n`;
     }
 
+    // Keyless. Nothing can be paid from here, and nothing should be: the only
+    // correct way to buy a call is to settle inside it. So all this does is
+    // report what the worker costs and whether it is actually answering, and it
+    // is careful never to imply that paying by hand would have worked.
     const result = await invokeWorker(a.endpoint, input);
-    const intent = paymentIntent(a);
+    const latencyMs = Date.now() - startedAt;
     const rendered = typeof result.body === 'string' ? result.body : JSON.stringify(result.body, null, 2);
 
-    const latencyMs = Date.now() - startedAt;
-    // Keyless: nothing is paid here, so there is no settlement to grade yet.
-    // The link carries the agent and the stated expectation into "Hire & pay",
-    // and the review is raised automatically once the human's payment lands.
-    const hireUrl = handoffLink('hire', {
-      agentId: a.id,
-      agentName: a.name,
-      amountUsdc: usdc(a.pricePerCall),
-      expectation: want,
-    });
-
-    const text = [
+    const head = [
       `Agent: ${a.name} (${a.id}) — ${usdc(a.pricePerCall)} USDC/call — seller ${short(a.owner)}`,
       `Track record: ${summarise(trackRecord(a))}`,
       want ? `Expectation on record: "${want}"` : '',
-      `Endpoint answered in ${latencyMs}ms`,
+      `NOT HIRED. Nothing was paid and no output was bought.`,
       ``,
-      result.ok
-        ? `WORKER OUTPUT:\n${rendered}`
-        : result.status === 402
-          ? `WORKER OUTPUT: (withheld — the worker is x402-gated and this session holds no\nagent key, so nothing was paid and nothing was served. That is the paywall\nworking, not a failure.)`
-          : `WORKER OUTPUT: (unavailable — ${result.note || 'call failed'}${result.status ? `, HTTP ${result.status}` : ''})`,
-      ``,
-      `PAYMENT INTENT — ${a.name} costs ${intent.amount} USDC per call:`,
-      JSON.stringify(intent, null, 2),
-      ``,
-      `HIRE IT — opens the Sovereign app with this expectation prefilled:`,
-      hireUrl,
-      ``,
-      `The buyer's embedded Privy wallet signs the transfer on Arc under their spend`,
-      `policy. Afterwards the app asks them to grade the result against the`,
-      `expectation above, and that rating becomes this worker's public track record.`,
-    ].filter(Boolean).join('\n');
+    ].filter(Boolean);
 
-    return { content: [{ type: 'text', text: autonomousNote + text }] };
+    // A 402 is the happy case for an unpaid probe: the worker is up and its
+    // paywall is doing its job.
+    if (result.status === 402) {
+      return { content: [{ type: 'text', text: autonomousNote + head.concat([
+        `The worker is live and answered its paywall in ${latencyMs}ms, but this`,
+        `session holds no agent key, so it cannot pay.`,
+        ``,
+        `To hire it, give this session a funded Arc key:`,
+        `  SOVEREIGN_AGENT_KEY=0x...   (32-byte hex, in .mcp.json env)`,
+        `Then call_agent settles and calls in one step, and releases the money`,
+        `only if the worker answers.`,
+        ``,
+        `Tell the user that plainly. Do NOT suggest paying in the web app: a`,
+        `transfer made there does not call the worker, so it can take the money`,
+        `and return nothing.`,
+      ]).join('\n') }] };
+    }
+
+    // Anything else means the endpoint is not serving. This is the case that
+    // used to end in a payment link.
+    if (!result.ok) {
+      const why = result.status ? `HTTP ${result.status}` : (result.note || 'the call failed');
+      return { content: [{ type: 'text', text: autonomousNote + head.concat([
+        `The worker's endpoint is not answering — ${why}, after ${latencyMs}ms.`,
+        result.body ? `It said: ${String(rendered).slice(0, 300)}` : '',
+        ``,
+        `A listing can outlive its endpoint: the registry entry is on-chain and`,
+        `permanent, the service behind it is not. This one is currently broken.`,
+        ``,
+        `Do NOT offer the user any way to pay it. Say the worker is down, and`,
+        `offer search_agents to find another one, or to do the job yourself.`,
+      ]).filter(Boolean).join('\n') }] };
+    }
+
+    // 200 without a paywall: the endpoint served for free. Worth saying out
+    // loud, because an unpriced worker is not the product working.
+    return { content: [{ type: 'text', text: autonomousNote + head.concat([
+      `The endpoint answered 200 in ${latencyMs}ms WITHOUT asking for payment,`,
+      `even though it is listed at ${usdc(a.pricePerCall)} USDC/call. It is not`,
+      `x402-gated, so this output was free and no receipt exists for it.`,
+      ``,
+      `WORKER OUTPUT:\n${rendered}`,
+      ``,
+      `Tell the user the output came back unpaid and ungraded, so it does not`,
+      `count towards this worker's track record.`,
+    ]).join('\n') }] };
   }
 );
 
@@ -519,5 +542,5 @@ server.tool(
 await server.connect(new StdioServerTransport());
 console.error(
   'sovereign-mcp running (stdio). SUBGRAPH_URL ' + (SUBGRAPH_URL ? 'set' : 'NOT set') +
-  ' — payments: ' + (hasAutonomousKeys() ? 'AUTONOMOUS (x402 via Circle Gateway)' : 'keyless (human confirms in the web app)')
+  ' — payments: ' + (hasAutonomousKeys() ? 'ON (x402 via Circle Gateway)' : 'OFF (no SOVEREIGN_AGENT_KEY — discovery only, nothing can be hired)')
 );
