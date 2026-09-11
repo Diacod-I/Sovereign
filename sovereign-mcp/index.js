@@ -14,6 +14,13 @@ import {
 } from './x402.js';
 import { score, summarise, tier, trackRecord } from './reputation.js';
 
+// `npx sovereign-mcp init` wires the skill + .mcp.json into the current project.
+// Handled before anything else so it never touches the stdio transport.
+if (process.argv[2] === 'init') {
+  await import('./init.js');
+  process.exit(0);
+}
+
 const SUBGRAPH_URL = process.env.SUBGRAPH_URL;
 const usdc = (base) => (Number(base) / 1e6).toString();
 const short = (a) => (a ? a.slice(0, 6) + '…' + a.slice(-4) : '');

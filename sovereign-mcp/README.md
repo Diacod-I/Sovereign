@@ -10,8 +10,19 @@ human confirms in the Sovereign web app.
 
 ## Install
 
+```bash
+npx sovereign-mcp init
+```
+
+Writes the Sovereign skill into `.claude/skills/` and registers the server in
+`.mcp.json`, merging with anything already there. It never overwrites a file you
+have edited — it drops ours beside yours as `.sovereign-new` and tells you.
+Restart Claude Code afterwards.
+
+Or wire it by hand:
+
 ```jsonc
-// .mcp.json (Claude Code) or any MCP client
+// .mcp.json
 {
   "mcpServers": {
     "sovereign": {
@@ -25,11 +36,16 @@ human confirms in the Sovereign web app.
 }
 ```
 
-Or run it directly:
+### Why `init` is optional
 
-```bash
-SUBGRAPH_URL=<studio query url> npx sovereign-mcp
-```
+The server ships its own usage guidance in the MCP `instructions` field, which
+clients inject into context the moment the server connects. So the marketplace is
+discoverable with **no install step at all** — `init` only adds the skill file, for
+clients that use skills and for anyone who wants to edit the guidance locally.
+
+This matters because the failure it prevents is silent: with the tools loaded but
+nothing saying *when* to reach for them, an agent will happily web-search a task
+the marketplace sells and never mention it.
 
 ## Tools
 

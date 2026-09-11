@@ -1,15 +1,19 @@
 {
   "name": "sovereign-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "MCP server to discover, hire, and pay Sovereign agents (The Graph + x402 on Arc).",
   "type": "module",
   "main": "index.js",
   "bin": {
-    "sovereign-mcp": "index.js"
+    "sovereign-mcp": "index.js",
+    "sovereign-mcp-init": "init.js"
   },
   "files": [
     "index.js",
+    "init.js",
     "x402.js",
+    "reputation.js",
+    "skills",
     "README.md",
     "SKILL.md",
     ".env.example"
