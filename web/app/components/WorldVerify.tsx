@@ -12,10 +12,15 @@ import {
   WORLD_ACTION,
   WORLD_APP_ID,
   WORLD_ENVIRONMENT,
-  worldConfigured,
+  worldStatus,
   writeVerification,
   type SellerVerification,
 } from '../lib/world';
+import {
+  explainAttestFailure,
+  useAttest,
+  type Attestation,
+} from '../lib/verification';
 
 type Props = {
   wallet?: string | null;
@@ -63,19 +68,50 @@ export default function WorldVerify({ wallet, onVerified, label, className, disa
   const [rpContext, setRpContext] = useState<RpContext | null>(null);
   const verifiedProofRef = useRef<VerifiedProof | null>(null);
   const serverErrorRef = useRef<string | null>(null);
+  const attestationRef = useRef<Attestation | null>(null);
+  // A proof that passed the server but has not reached the chain yet. Held so a
+  // rejected or failed wallet prompt leaves a retry rather than a dead end: the
+  // World check is the expensive step and must not have to be redone.
+  const [unpublished, setUnpublished] = useState<{ proof: VerifiedProof; attestation: Attestation } | null>(null);
+  const [publishing, setPublishing] = useState(false);
   const cls = className ?? baseCls;
   const text = label ?? 'Verify with World ID (Selfie Check)';
   const signal = wallet?.toLowerCase();
+  const attest = useAttest(signal ?? null);
 
-  const persist = (proof: VerifiedProof) => {
+  const persist = (proof: VerifiedProof, tx?: string) => {
     const verification: SellerVerification = {
       wallet: signal || '',
       nullifierHash: proof.nullifierHash,
       level: proof.level,
       at: Date.now(),
+      tx,
     };
     writeVerification(verification);
     onVerified(verification);
+  };
+
+  /**
+   * Publishes the attestation as an Arc transaction. Separated from the World
+   * flow because it costs gas and can be declined -- and because failing here
+   * must not throw away a proof that already cost the user a selfie.
+   */
+  const publish = async (proof: VerifiedProof, attestation: Attestation) => {
+    setPublishing(true);
+    setErr(null);
+    try {
+      const tx = await attest(attestation);
+      setUnpublished(null);
+      persist(proof, tx);
+    } catch (e) {
+      setUnpublished({ proof, attestation });
+      setErr(explainAttestFailure(e));
+      // Keep the local badge either way: the human did verify. It is just not
+      // public yet, which the caller can see from the missing tx.
+      persist(proof);
+    } finally {
+      setPublishing(false);
+    }
   };
 
   const startVerification = async () => {
@@ -97,17 +133,49 @@ export default function WorldVerify({ wallet, onVerified, label, className, disa
     }
   };
 
-  // Retain a walkable demo flow until the Portal credentials are provided.
-  if (!worldConfigured) {
+  const status = worldStatus();
+
+  // Explicitly opted in, for local work without Portal credentials. Labelled so it
+  // can never be mistaken for a real verification.
+  if (status.mode === 'demo') {
     return (
-      <button
-        type="button"
-        disabled={disabled || !signal}
-        onClick={() => persist({ nullifierHash: 'demo', level: 'demo' })}
-        className={cls}
-      >
-        {text} <span className="text-muted">· demo</span>
-      </button>
+      <div>
+        <button
+          type="button"
+          disabled={disabled || !signal}
+          onClick={() => persist({ nullifierHash: 'demo', level: 'demo' })}
+          className={cls}
+        >
+          {text} <span className="text-muted">· demo</span>
+        </button>
+        <div className="mt-2 text-[11px] leading-relaxed text-amber-400">
+          Demo mode: this grants a badge without checking anything. Never enable
+          NEXT_PUBLIC_WORLD_DEMO on a deployed site.
+        </div>
+      </div>
+    );
+  }
+
+  // Misconfigured. Refuse rather than fall back to handing out badges, and name
+  // exactly what is missing so it is fixable without reading the source.
+  if (status.mode === 'unconfigured') {
+    return (
+      <div>
+        <button type="button" disabled className={cls}>
+          {text}
+        </button>
+        <div className="mt-2 text-[11px] leading-relaxed text-red-400">
+          World ID is not configured, so nobody can be verified here.
+          {status.missing.length > 0 && (
+            <span className="mt-1 block font-mono text-muted">
+              missing: {status.missing.join(', ')}
+            </span>
+          )}
+          <span className="mt-1 block text-muted">
+            These are build-time variables. After adding them, redeploy.
+          </span>
+        </div>
+      </div>
     );
   }
 
@@ -115,12 +183,25 @@ export default function WorldVerify({ wallet, onVerified, label, className, disa
     <div>
       <button
         type="button"
-        disabled={disabled || busy || !signal}
-        onClick={startVerification}
+        disabled={disabled || busy || publishing || !signal}
+        onClick={unpublished ? () => void publish(unpublished.proof, unpublished.attestation) : startVerification}
         className={cls}
       >
-        {busy ? 'Preparing World ID…' : text}
+        {publishing
+          ? 'Recording on Arc…'
+          : unpublished
+            ? 'Publish verification on Arc'
+            : busy
+              ? 'Preparing World ID…'
+              : text}
       </button>
+
+      {unpublished && !publishing && (
+        <div className="mt-2 text-[11px] leading-relaxed text-amber-400">
+          You are verified, but only on this device. Publishing it on Arc is what
+          lets buyers see it.
+        </div>
+      )}
 
       {rpContext && signal && (
         <IDKitRequestWidget
@@ -154,14 +235,22 @@ export default function WorldVerify({ wallet, onVerified, label, className, disa
                 nullifierHash: data.nullifierHash,
                 level: data.level || 'selfie',
               };
+              attestationRef.current = (data.attestation as Attestation | null) ?? null;
             } finally {
               setBusy(false);
             }
           }}
           onSuccess={() => {
             const proof = verifiedProofRef.current;
-            if (proof) persist(proof);
-            else setErr(serverErrorRef.current || 'World returned a proof, but it was not accepted by the server.');
+            if (!proof) {
+              setErr(serverErrorRef.current || 'World returned a proof, but it was not accepted by the server.');
+              return;
+            }
+            const attestation = attestationRef.current;
+            // No attestation means the contract or attestor key is not configured.
+            // Fall back to the local-only badge rather than blocking on it.
+            if (attestation) void publish(proof, attestation);
+            else persist(proof);
           }}
           onError={(errorCode) => setErr(serverErrorRef.current || describeError(errorCode))}
         />

@@ -1,5 +1,6 @@
 import type { IDKitResult, ResponseItemV3, ResponseItemV4 } from '@worldcoin/idkit';
 import { hashSignal } from '@worldcoin/idkit/hashing';
+import { signAttestation } from '../../lib/attestation';
 
 export const runtime = 'nodejs';
 
@@ -114,10 +115,19 @@ export async function POST(request: Request) {
   }
 
   seenNullifiers.set(proof.nullifier, wallet);
+
+  // The proof is good. Sign an attestation the caller can put on-chain, so the
+  // badge is visible to buyers rather than only to the person who earned it.
+  // A null here means no attestor key or no deployed contract: verification still
+  // succeeds, it just stays local, which is what it always did.
+  const level = proof.identifier || 'selfie';
+  const attestation = await signAttestation(wallet, proof.nullifier, level);
+
   return Response.json({
     ok: true,
     nullifierHash: proof.nullifier,
-    level: proof.identifier || 'selfie',
+    level,
     wallet,
+    attestation,
   });
 }
