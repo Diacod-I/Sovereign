@@ -52,3 +52,18 @@ type AgentBuyer @entity(immutable: false) {
   firstAt: BigInt!
   lastAt: BigInt!
 }
+
+# One human, one account -- mirrored from Verifications.sol.
+#
+# Keyed by the account address so a listing's owner resolves to a badge with a
+# single lookup, which is what the marketplace needs: it renders many cards at
+# once and cannot afford a query per seller.
+type Verification @entity(immutable: false) {
+  id: ID!              # the account address, lowercase hex
+  account: Bytes!
+  nullifier: Bytes!    # World ID nullifier for our action -- the human's pseudonym
+  level: String!       # credential used, e.g. "selfie"
+  at: BigInt!
+  block: BigInt!
+  tx: Bytes!
+}

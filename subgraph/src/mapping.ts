@@ -6,7 +6,8 @@ import {
 } from "../generated/AgentRegistry/AgentRegistry";
 import { BigInt } from "@graphprotocol/graph-ts";
 import { ReceiptFiled } from "../generated/Receipts/Receipts";
-import { Agent, AgentBuyer, Receipt } from "../generated/schema";
+import { Verified } from "../generated/Verifications/Verifications";
+import { Agent, AgentBuyer, Receipt, Verification } from "../generated/schema";
 
 export function handleAgentRegistered(e: AgentRegistered): void {
   let a = new Agent(e.params.id);
@@ -117,4 +118,21 @@ export function handleReceiptFiled(e: ReceiptFiled): void {
   if (ab.calls == 2) agent.repeatBuyers = agent.repeatBuyers + 1;
 
   agent.save();
+}
+
+// One human, one account. The contract already refuses a second account for the
+// same nullifier, so this only ever writes a fresh row -- but it is written as an
+// upsert anyway, because a subgraph that silently drops a re-index is worse than
+// one that overwrites identical data.
+export function handleVerified(e: Verified): void {
+  let id = e.params.account.toHexString();
+  let v = Verification.load(id);
+  if (v == null) v = new Verification(id);
+  v.account = e.params.account;
+  v.nullifier = e.params.nullifier;
+  v.level = e.params.level;
+  v.at = BigInt.fromU64(e.params.at);
+  v.block = e.block.number;
+  v.tx = e.transaction.hash;
+  v.save();
 }
