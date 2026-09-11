@@ -27,28 +27,28 @@ export default function Home() {
   const [active, setActive] = useState(0);
   const carouselRef = useRef<any>(null);
 
-  // Where to land AFTER a login the user just started. It stays null on a plain
-  // page load, which is what keeps an already-signed-in visitor on the landing
-  // page instead of being bounced to /dashboard the moment Privy hydrates —
-  // previously that bounce made "Become a seller" impossible to click.
-  const [pending, setPending] = useState<'buyer' | 'seller' | null>(null);
+  // Whether a login the user just started should route onwards. It stays false on
+  // a plain page load, which is what keeps an already-signed-in visitor on the
+  // landing page instead of being bounced to /dashboard the moment Privy hydrates.
+  const [pending, setPending] = useState(false);
 
-  const go = (dest: 'buyer' | 'seller' = 'buyer') => {
-    const href = dest === 'seller' ? '/seller' : '/dashboard';
+  // One destination now. There is no separate seller sign-up: buying and selling
+  // are the same account, and the thing that used to divide them -- the World ID
+  // check -- is asked for at the first action that other people can see.
+  const go = () => {
     if (authenticated) {
-      router.push(href);
+      router.push('/dashboard');
       return;
     }
-    setPending(dest);
+    setPending(true);
     login();
   };
 
   // Route only once the login the user actually initiated succeeds.
   useEffect(() => {
     if (!ready || !authenticated || !pending) return;
-    const href = pending === 'seller' ? '/seller' : '/dashboard';
-    setPending(null);
-    router.replace(href);
+    setPending(false);
+    router.replace('/dashboard');
   }, [ready, authenticated, pending, router]);
 
   return (
@@ -58,8 +58,8 @@ export default function Home() {
       <header className="mx-auto flex max-w-5xl items-center justify-between px-6 py-5">
         <Brand />
         <div className="flex items-center gap-5">
-          <button onClick={() => go('seller')} className="text-sm text-muted transition-colors hover:text-foreground">Become a seller</button>
-          <button onClick={() => go('buyer')} className="text-sm text-muted transition-colors hover:text-foreground">
+          <a href="#how" className="text-sm text-muted transition-colors hover:text-foreground">How it works</a>
+          <button onClick={go} className="text-sm text-muted transition-colors hover:text-foreground">
             {authenticated ? 'Dashboard' : 'Sign in'}
           </button>
         </div>
@@ -88,7 +88,7 @@ export default function Home() {
             </div>
             <div className="mt-9 flex flex-wrap items-center gap-5">
               <button
-                onClick={() => go('buyer')}
+                onClick={go}
                 disabled={!ready}
                 className="rounded-lg bg-[var(--btn)] px-5 py-3 text-sm font-medium text-[var(--btn-fg)] transition-opacity hover:opacity-90 disabled:opacity-40"
               >
