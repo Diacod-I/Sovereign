@@ -21,6 +21,7 @@ import { NotPaidError, payAndCall } from '../../../lib/x402-pay.server';
 import { SUBGRAPH_URL } from '../../../lib/arc';
 import { assertFetchableUrl } from '../../../lib/ssrf';
 import { undelivered as undeliveredFrom } from '../../../lib/hosted';
+import { isHidden } from '../../../lib/curation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -102,6 +103,12 @@ export async function POST(request: Request) {
   }
   if (!listing) return json({ error: `No listing with id "${agentId}".` }, 404);
   if (!listing.active) return json({ error: `"${listing.name}" has been retired by its seller.` }, 410);
+  // Hiding a listing in the grid is not enough. An agent that learned the id
+  // from anywhere else -- an old transcript, the registry directly -- must not
+  // be able to spend this account's money on it.
+  if (isHidden(listing.id)) {
+    return json({ error: `"${listing.name}" is not served by this marketplace.` }, 410);
+  }
 
   // The endpoint comes off the chain, but it is still a URL this server is
   // about to fetch on someone else's instruction, so it goes through the same

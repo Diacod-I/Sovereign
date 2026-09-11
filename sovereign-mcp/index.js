@@ -103,15 +103,40 @@ function handoffLink(kind, payload) {
   return `${SITE_URL}/dashboard?${kind}=${b64}`;
 }
 
+/**
+ * Listings this marketplace declines to serve.
+ *
+ * We read the registry directly, which is right -- discovery keeps working when
+ * the website is down -- but it means the chain's view and the marketplace's
+ * view can disagree. A registry entry whose owner wallet is lost can never be
+ * deactivated on chain, so the marketplace curates instead, and this is how
+ * that decision reaches Claude. Cached for the process: it changes on deploys.
+ *
+ * A failure here yields an empty set on purpose. Discovery continuing with
+ * nothing hidden is a better outcome than discovery failing outright, and the
+ * server refuses the purchase regardless.
+ */
+let hiddenPromise = null;
+function fetchHidden() {
+  if (hiddenPromise) return hiddenPromise;
+  hiddenPromise = fetch(`${SITE_URL}/api/curation`, { signal: AbortSignal.timeout(4000) })
+    .then((r) => (r.ok ? r.json() : { hidden: [] }))
+    .then((d) => new Set((d.hidden || []).map((s) => String(s).toLowerCase())))
+    .catch(() => new Set());
+  return hiddenPromise;
+}
+
 async function fetchActiveAgents() {
+  const hidden = await fetchHidden();
+  const keep = (list) => list.filter((a) => !hidden.has(String(a.id).toLowerCase()));
   try {
     const data = await queryGraph(`{ agents(where: { active: true }, first: 100) { ${AGENT_FIELDS} } }`);
-    return data.agents || [];
+    return keep(data.agents || []);
   } catch {
     // Receipts datasource not deployed yet — discovery still has to work, every
     // worker just reads as unproven.
     const data = await queryGraph(`{ agents(where: { active: true }, first: 100) { ${AGENT_FIELDS_BARE} } }`);
-    return data.agents || [];
+    return keep(data.agents || []);
   }
 }
 
