@@ -2,6 +2,7 @@
 'use client';
 import { PrivyProvider } from '@privy-io/react-auth';
 import { defineChain } from 'viem';
+import { ARC_RPC_URL } from './lib/arc';
 
 // Arc testnet — Circle's USDC-native L1. The native coin is USDC, and Arc's native
 // value fields are 18-decimal wei (verified against a real balance). Configuring the
@@ -11,7 +12,7 @@ export const arcTestnet = defineChain({
   name: 'Arc Testnet',
   nativeCurrency: { name: 'USDC', symbol: 'USDC', decimals: 18 },
   rpcUrls: {
-    default: { http: ['https://rpc.testnet.arc.io'] },
+    default: { http: [ARC_RPC_URL] },
   },
   blockExplorers: {
     default: { name: 'Arcscan', url: 'https://testnet.arcscan.app' },

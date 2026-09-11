@@ -17,9 +17,23 @@ export const ARC_CHAIN_ID = 5042002;
 export const USDC_DECIMALS = 18;
 const USDC_SCALE = 1e18;
 
-/** Public RPC. Used for plain eth_call reads that need no indexer. */
+/**
+ * The one Arc RPC URL, used for plain eth_call reads and for the chain
+ * definition handed to Privy.
+ *
+ * It lives here rather than in both places because it was in both places, with
+ * two different hosts. Circle's SDK ships `rpc.testnet.arc.network`; this app's
+ * chain config had `rpc.testnet.arc.io`. Both resolve, so nothing was visibly
+ * broken, and that is exactly the problem: the Gateway allowance read would
+ * quietly fail against the wrong one, return null, and the top-up flow would ask
+ * for an approval it did not need, forever, with no error anywhere.
+ *
+ * Defaulted to the host the working chain config already used, so this change
+ * moves the reads onto a known-good endpoint rather than moving transactions
+ * onto an unproven one. Override with NEXT_PUBLIC_ARC_RPC_URL.
+ */
 export const ARC_RPC_URL =
-  process.env.NEXT_PUBLIC_ARC_RPC_URL || 'https://rpc.testnet.arc.network';
+  process.env.NEXT_PUBLIC_ARC_RPC_URL || 'https://rpc.testnet.arc.io';
 
 export const ARC_EXPLORER =
   process.env.NEXT_PUBLIC_ARC_EXPLORER || 'https://testnet.arcscan.app';
