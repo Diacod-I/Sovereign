@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { usePrivy } from '@privy-io/react-auth';
+import { usePrivy, useSignMessage } from '@privy-io/react-auth';
 import { useRouter } from 'next/navigation';
 import SideNav, { tabFromUrl } from '../components/SideNav';
 import Copyable from '../components/Copyable';
@@ -21,6 +21,8 @@ import { useEmbeddedWallet } from '../lib/useEmbeddedWallet';
 import { readVerification, mergeVerification, shortNullifier, levelLabel, type SellerVerification } from '../lib/world';
 import { fetchVerification } from '../lib/verification';
 import { readProfile, writeProfile } from '../lib/profile';
+import { verificationsConfigured } from '../lib/verification';
+import { usePublishProfile } from '../lib/useDirectory';
 
 type Tab = 'workers' | 'profile';
 
@@ -95,6 +97,7 @@ export default function SellerDashboard() {
   const [pName, setPName] = useState('');
   const [pBio, setPBio] = useState('');
   const [profileSaved, setProfileSaved] = useState(false);
+  const [publishError, setPublishError] = useState<string | null>(null);
   // Profile reads as a page by default and only becomes a form on request. Edits
   // go to a draft so Cancel discards rather than silently keeping them.
   const [editingProfile, setEditingProfile] = useState(false);
@@ -113,6 +116,8 @@ export default function SellerDashboard() {
   const embedded = useEmbeddedWallet();
   const walletAddress = embedded.address;
   const registry = useRegistry(walletAddress);
+  const { signMessage } = useSignMessage();
+  const { publish, publishing } = usePublishProfile(walletAddress, signMessage);
 
   useEffect(() => {
     if (ready && !authenticated) router.replace('/');
@@ -263,7 +268,18 @@ export default function SellerDashboard() {
     setEditingProfile(true);
   };
 
-  const saveProfile = () => {
+  /**
+   * Save locally, then publish.
+   *
+   * Two steps because they can fail independently and only one of them is
+   * essential. The local write is what this browser reads; the publish is what
+   * every OTHER buyer's marketplace reads, and it needs a signature, which can
+   * be declined. A refused signature leaves the name saved here and uncredited
+   * elsewhere, which is a state worth naming rather than swallowing -- a seller
+   * who thinks buyers can see their name when they cannot will not work out why
+   * their listings look anonymous.
+   */
+  const saveProfile = async () => {
     const nm = draftName.trim();
     if (!nm) return;
     setPName(nm);
@@ -272,6 +288,10 @@ export default function SellerDashboard() {
     writeProfile({ name: nm, bio: draftBio });
     setEditingProfile(false);
     setProfileSaved(true);
+    setPublishError(null);
+
+    const res = await publish(nm, draftBio);
+    if (!res.ok) setPublishError(res.error);
   };
 
   return (
@@ -403,10 +423,28 @@ export default function SellerDashboard() {
                     onClick={startEditProfile}
                     className="rounded-lg border border-hairline px-4 py-2 text-sm text-muted transition-colors hover:text-foreground"
                   >
-                    {profileSaved && <span className="mb-2 text-sm text-accent">Saved</span> || <span className="mb-2 text-sm text-muted">Edit Profile</span>}
+                    {publishing
+                      ? <span className="mb-2 text-sm text-muted">Publishing…</span>
+                      : profileSaved
+                        ? <span className="mb-2 text-sm text-accent">Saved</span>
+                        : <span className="mb-2 text-sm text-muted">Edit Profile</span>}
                   </button>
                 )}
               </div>
+
+              {/* Saved here but not visible to anyone else. Worth saying out
+                  loud: the listing pages other buyers load read the published
+                  name, so a seller who stops at the local save is credited by
+                  address on every card and has no way to tell. */}
+              {publishError && (
+                <div className="mt-4 rounded-lg border border-amber-400/30 bg-amber-400/5 px-4 py-3 text-[11px] leading-relaxed text-amber-400">
+                  Saved on this device, but not published, so buyers still see your
+                  address on your listings. {publishError}{' '}
+                  <button onClick={startEditProfile} className="underline underline-offset-2">
+                    Try again
+                  </button>
+                </div>
+              )}
 
               {/* ---------- view: the page, not the form ---------- */}
               {!editingProfile && (
@@ -435,7 +473,21 @@ export default function SellerDashboard() {
                         {/* The nullifier is the only durable handle on this
                             verification, so make it copyable rather than decorative. */}
                         {!worldV.onChain && (
-                          <span className="text-amber-400">· not published, buyers cannot see this</span>
+                          <span className="text-amber-400">
+                            · {verificationsConfigured
+                                ? 'not on Arc yet, so buyers cannot see it'
+                                : 'held locally — this deployment has no verification contract'}
+                          </span>
+                        )}
+                        {worldV.onChain && worldV.tx && (
+                          <a
+                            href={txUrl(worldV.tx)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-muted underline-offset-2 hover:text-foreground hover:underline"
+                          >
+                            · on Arc
+                          </a>
                         )}
                         {worldV.nullifierHash !== 'demo' && (
                           <Copyable
@@ -461,6 +513,23 @@ export default function SellerDashboard() {
                     {!worldV && (
                       <div className="mt-4 max-w-xs">
                         <WorldVerify wallet={walletAddress} onVerified={setWorldV} label="Verify with World ID" />
+                      </div>
+                    )}
+
+                    {/* Verified, but only here. The check itself is one-time and
+                        cannot be repeated against World, so the way back is to
+                        publish the record -- not to prove personhood again. */}
+                    {worldV && !worldV.onChain && verificationsConfigured && (
+                      <div className="mt-4 max-w-md rounded-lg border border-amber-400/30 bg-amber-400/5 p-4">
+                        <p className="text-[11px] leading-relaxed text-amber-400">
+                          You are verified, but the record never reached Arc, so every
+                          buyer still sees you as unverified and the “verified humans
+                          only” filter hides your listings. Publishing costs one
+                          transaction and a few cents of gas.
+                        </p>
+                        <div className="mt-3 max-w-xs">
+                          <WorldVerify wallet={walletAddress} onVerified={setWorldV} label="Publish to Arc" />
+                        </div>
                       </div>
                     )}
 
