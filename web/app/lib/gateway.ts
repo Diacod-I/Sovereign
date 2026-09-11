@@ -57,6 +57,18 @@ const WALLET_ABI = [
   },
 ] as const;
 
+/**
+ * How much to approve when an approval is needed at all.
+ *
+ * Not unlimited. Infinite approval is the reflex in this corner of the world and
+ * it is the wrong tone for a product whose entire argument is bounded spending:
+ * telling someone their agent can only ever spend what they moved across, while
+ * quietly granting a contract permission to take everything, does not survive
+ * being read aloud. A hundred covers twenty top-ups at the usual size, which is
+ * enough that nobody meets the second prompt again during a demo.
+ */
+export const APPROVAL_HEADROOM_USDC = 100;
+
 export const approveData = (amount: string) =>
   encodeFunctionData({
     abi: erc20Abi,
@@ -84,6 +96,38 @@ export const availableBalanceData = (owner: string) =>
     functionName: 'availableBalance',
     args: [GATEWAY.usdc, owner as `0x${string}`],
   });
+
+/**
+ * How much the Gateway contract is currently allowed to take, in human USDC.
+ *
+ * Read before topping up so an approval that already covers the amount is not
+ * asked for again. This is the whole difference between the first top-up and
+ * every one after it.
+ *
+ * Returns null when it cannot be read, and the caller must treat that as "ask
+ * for the approval" rather than "assume there is one": a skipped approve makes
+ * the deposit revert, which costs a wallet prompt AND a gas fee to learn
+ * something a failed read already hinted at.
+ */
+export async function gatewayAllowance(rpcUrl: string, owner: string): Promise<number | null> {
+  try {
+    const res = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'eth_call',
+        params: [{ to: GATEWAY.usdc, data: allowanceData(owner) }, 'latest'],
+      }),
+    });
+    const json = await res.json();
+    if (!json?.result || json.error) return null;
+    return Number(BigInt(json.result)) / 1e6;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * What this wallet has available to agent payments, in human USDC.
