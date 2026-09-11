@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePrivy, useSendTransaction } from '@privy-io/react-auth';
 import { parseUnits } from 'viem';
 import { useRouter } from 'next/navigation';
@@ -15,6 +15,9 @@ import WorkerEarnings from '../components/WorkerEarnings';
 import OnboardingCard from '../components/Onboarding';
 import { useEmbeddedWallet } from '../lib/useEmbeddedWallet';
 import { readProfile } from '../lib/profile';
+import { displayName, type PublicProfile } from '../lib/directory';
+import { approveData, depositData, gatewayAvailable, GATEWAY } from '../lib/gateway';
+import { useDirectory } from '../lib/useDirectory';
 import { readVerification, mergeVerification, type SellerVerification } from '../lib/world';
 import { fetchVerification, useVerified } from '../lib/verification';
 import {
@@ -30,6 +33,7 @@ import {
   buildBalanceSeries,
   fetchAgentsByOwner,
   fetchBalance,
+  ARC_RPC_URL,
   fetchWalletData,
   formatUsdc,
   rangeDef,
@@ -234,16 +238,17 @@ function Stat({ label, value, sub, delta }: { label: string; value: string; sub?
  * its verification yet must not be labelled unverified, because "unverified" is
  * a claim about someone and a spinner is not.
  */
+/**
+ * Shown only when there is something to show.
+ *
+ * An "unverified" tag on everyone who has not been through World ID reads as an
+ * accusation, and it is on the wrong party: the absence of a badge is already
+ * the absence of a claim. Marking a positive and staying quiet otherwise says
+ * the same thing without telling every new seller that the marketplace doubts
+ * them.
+ */
 function HumanBadge({ verified }: { verified: boolean | null }) {
-  if (verified === null) return null;
-  if (!verified) {
-    return (
-      <span className="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-wider text-muted">
-        <span className="inline-block h-1.5 w-1.5 rounded-full bg-muted" />
-        unverified
-      </span>
-    );
-  }
+  if (verified !== true) return null;
   return (
     <span className="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-wider text-accent">
       <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent" />
@@ -291,13 +296,11 @@ function ScoreBadge({ record, overlay = false }: { record: TrackRecord; overlay?
     ? 'bg-black/55 backdrop-blur-sm border-white/20'
     : '';
 
-  if (sc.overall === null) {
-    return (
-      <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[10px] ${overlay ? `${base} text-white/80` : 'border-hairline text-muted'}`}>
-        Unproven
-      </span>
-    );
-  }
+  // No graded calls yet means no score to show. Previously this said
+  // "Unproven", which is true of every new listing and reads as a warning
+  // rather than a fact -- it made the marketplace look like it was full of
+  // things not to buy. Silence is the honest rendering of no evidence.
+  if (sc.overall === null) return null;
   const tone = sc.overall >= 75 ? 'text-accent border-accent/40' : sc.overall >= 50 ? 'text-amber-400 border-amber-400/40' : 'text-red-400 border-red-400/40';
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[10px] ${tone} ${base}`}>
@@ -357,7 +360,7 @@ function ReceiptRowView({ r }: { r: ReceiptRow }) {
 }
 
 // The MCP detail body — shown in the click modal. Every field here is on-chain.
-function McpDetails({ l }: { l: Listing }) {
+function McpDetails({ l, sellerName }: { l: Listing; sellerName: string }) {
   const tags = l.tags ? l.tags.split(',').map((t) => t.trim()).filter(Boolean) : [];
   const score = scoreOf(l.record);
   const [history, setHistory] = useState<ReceiptRow[] | null>(null);
@@ -379,7 +382,7 @@ function McpDetails({ l }: { l: Listing }) {
             <span className="font-medium">{l.name}</span>
             <ScoreBadge record={l.record} />
           </div>
-          <div className="text-xs text-muted">by <span className="font-mono">{short(l.owner)}</span> · {score.tierLabel}</div>
+          <div className="text-xs text-muted">by {sellerName} · {score.tierLabel}</div>
         </div>
       </div>
 
@@ -500,6 +503,17 @@ export default function Dashboard() {
   // marketplace detail modal
   const [openId, setOpenId] = useState<string | null>(null);
   const [sellerId, setSellerId] = useState<string | null>(null);
+  const [verifiedOnly, setVerifiedOnly] = useState(false);
+  // Names for every wallet with something listed, so a card can credit a person
+  // rather than a hex string. Resolved as a batch: one request for the page,
+  // not one per card.
+  const directory: Record<string, PublicProfile> | null = useDirectory(
+    useMemo(() => market.map((l) => l.owner), [market]),
+  );
+  const nameFor = useCallback(
+    (address: string) => displayName(address, directory),
+    [directory],
+  );
   const [q, setQ] = useState('');
 
   // Workers this wallet has published, for the Overview count. The list itself
@@ -681,7 +695,26 @@ export default function Dashboard() {
   const removeWl = (id: string) => setAllowlist((list) => list.filter((w) => w.id !== id));
 
   const openListing = market.find((l) => l.id === openId) || null;
-  const filtered = market.filter((l) => (l.name + ' ' + l.summary + ' ' + l.tags + ' ' + l.owner).toLowerCase().includes(q.trim().toLowerCase()));
+  /**
+   * Verification, used as a filter rather than a decoration.
+   *
+   * A badge nobody can act on is a sticker. Being able to say "only people who
+   * have proved they are one human" is what makes the World check worth doing:
+   * it is the difference between a claim on a profile and a rule about who you
+   * are willing to hire. It also puts the cost on the right side -- one person
+   * spinning up ten seller wallets gets ten listings that this switch hides.
+   */
+  const isVerifiedOwner = useCallback(
+    (owner: string) => !!verified && verified.has(owner.toLowerCase()),
+    [verified],
+  );
+  const filtered = market.filter((l) => {
+    if (verifiedOnly && !isVerifiedOwner(l.owner)) return false;
+    return (l.name + ' ' + l.summary + ' ' + l.tags + ' ' + l.owner)
+      .toLowerCase()
+      .includes(q.trim().toLowerCase());
+  });
+  const verifiedCount = market.filter((l) => isVerifiedOwner(l.owner)).length;
   const isAllowlisted = (id: string) => allowlist.some((w) => w.listingId === id);
 
   /** Asks for a per-call cap before trusting a worker, rather than assuming one. */
@@ -699,6 +732,44 @@ export default function Dashboard() {
   };
 
   const reloadWallet = () => setWalletNonce((n) => n + 1);
+
+  // The Gateway balance: separate from the treasury, and the only one an agent
+  // payment can actually spend. Read straight from the GatewayWallet contract,
+  // so it needs no Circle API key. null means "not read yet or unreadable",
+  // which the card must not render as zero.
+  const [gatewayBalance, setGatewayBalance] = useState<number | null>(null);
+  const [gatewayNonce, setGatewayNonce] = useState(0);
+  const reloadGateway = useCallback(() => setGatewayNonce((n) => n + 1), []);
+
+  useEffect(() => {
+    if (!walletAddress) return;
+    let alive = true;
+    gatewayAvailable(ARC_RPC_URL, walletAddress).then((v) => { if (alive) setGatewayBalance(v); });
+    return () => { alive = false; };
+  }, [walletAddress, gatewayNonce]);
+
+  /**
+   * Move USDC from the treasury into Gateway, so agents can spend it.
+   *
+   * Two transactions, and the approval is not skipped when one already exists
+   * because reading the allowance costs a round trip to decide something the
+   * chain will decide anyway -- a redundant approve is cheap, a deposit that
+   * reverts for want of one is a confusing failure. They are sent in order and
+   * the second is only sent if the first was accepted.
+   */
+  const fundGateway = async (amount: string): Promise<void> => {
+    if (!walletAddress) throw new Error('No wallet');
+    await sendTransaction(
+      { to: GATEWAY.usdc, data: approveData(amount), chainId: ARC_CHAIN_ID },
+      { address: walletAddress },
+    );
+    await sendTransaction(
+      { to: GATEWAY.wallet, data: depositData(amount), chainId: ARC_CHAIN_ID },
+      { address: walletAddress },
+    );
+    reloadWallet();
+    reloadGateway();
+  };
   // Native USDC transfer signed by the embedded wallet on Arc. Arc's native value
   // fields are 18-decimal wei, so encode with parseUnits (exact BigInt, no float).
   const withdraw = async (to: string, amount: number): Promise<string> => {
@@ -811,6 +882,13 @@ export default function Dashboard() {
 
               <BalanceCard series={series} range={range} setRange={setRange} loading={walletLoading} error={walletError} hasWallet={!!walletAddress} onAdd={() => setShowDeposit(true)} />
 
+              <AgentFunds
+                available={gatewayBalance}
+                onFund={fundGateway}
+                onRefresh={reloadGateway}
+                hasWallet={!!walletAddress}
+              />
+
               {/* The spend policy used to be a card in a roster of buyer agents.
                   There is one of them now, and it governs every hire, so it reads
                   as a property of the account rather than an object to manage. */}
@@ -849,9 +927,9 @@ export default function Dashboard() {
                 <>
                   <button onClick={() => setSellerId(null)} className="text-sm text-muted transition-colors hover:text-foreground">← Back to marketplace</button>
                   <div className="mt-4 flex items-center gap-4">
-                    <Avatar name={sellerId} size={56} />
+                    <Avatar name={nameFor(sellerId)} size={56} />
                     <div>
-                      <h1 className="font-mono text-xl font-semibold tracking-tight">{short(sellerId)}</h1>
+                      <h1 className="text-xl font-semibold tracking-tight">{nameFor(sellerId)}</h1>
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
                         <HumanBadge verified={verified === null ? null : verified.has(sellerId.toLowerCase())} />
                         <Copyable value={sellerId} className="font-mono text-muted hover:text-foreground">{short(sellerId)}</Copyable>
@@ -879,11 +957,42 @@ export default function Dashboard() {
                 <>
               <h1 className="text-2xl font-semibold tracking-tight">Marketplace</h1>
               <p className="mt-1 text-sm text-muted">Workers you can hire — live from the on-chain registry.</p>
-              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search workers…" className="mt-6 w-full rounded-lg border border-hairline bg-background px-3 py-2.5 text-sm outline-none focus:border-accent" />
+              <div className="mt-6 flex flex-wrap items-center gap-2">
+                <input
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  placeholder="Search workers…"
+                  className="min-w-[12rem] flex-1 rounded-lg border border-hairline bg-background px-3 py-2.5 text-sm outline-none focus:border-accent"
+                />
+                {/* Hidden entirely while the verified set is still loading or
+                    the contract is not deployed: a filter that would blank the
+                    board is worse than no filter. */}
+                {verified && verified.size > 0 && (
+                  <button
+                    onClick={() => setVerifiedOnly((v) => !v)}
+                    aria-pressed={verifiedOnly}
+                    className={`shrink-0 rounded-lg border px-3 py-2.5 text-sm transition-colors ${
+                      verifiedOnly
+                        ? 'border-accent text-accent'
+                        : 'border-hairline text-muted hover:text-foreground'
+                    }`}
+                  >
+                    <span className={`mr-1.5 inline-block h-1.5 w-1.5 rounded-full ${verifiedOnly ? 'bg-accent' : 'bg-muted'}`} />
+                    Verified humans only
+                    <span className="ml-1.5 font-mono text-[11px] opacity-70">{verifiedCount}</span>
+                  </button>
+                )}
+              </div>
               {marketLoading && <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-muted">Loading workers from the subgraph…</div>}
               {!marketLoading && marketError && <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-red-400">{marketError}</div>}
               {!marketLoading && !marketError && market.length === 0 && <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-muted">No workers registered on-chain yet.</div>}
-              {!marketLoading && !marketError && market.length > 0 && filtered.length === 0 && <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-muted">No workers match “{q}”.</div>}
+              {!marketLoading && !marketError && market.length > 0 && filtered.length === 0 && (
+                <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-muted">
+                  {verifiedOnly && !q.trim()
+                    ? 'No listings yet from sellers who have proved they are a unique human.'
+                    : `No workers match “${q}”${verifiedOnly ? ' among verified sellers' : ''}.`}
+                </div>
+              )}
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 {filtered.map((l) => (
                   <div key={l.id} className="overflow-hidden rounded-xl border border-hairline bg-panel">
@@ -897,12 +1006,12 @@ export default function Dashboard() {
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex min-w-0 items-center gap-3">
                         <button onClick={() => setSellerId(l.owner)} aria-label="View seller profile" className="shrink-0">
-                          <Avatar name={l.owner} />
+                          <Avatar name={nameFor(l.owner)} />
                         </button>
                         <div className="min-w-0">
                           <div className="truncate font-medium">{l.name}</div>
                           <div className="flex flex-wrap items-center gap-x-2 text-xs text-muted">
-                            <span>by <button onClick={() => setSellerId(l.owner)} className="font-mono underline underline-offset-2 hover:text-foreground">{short(l.owner)}</button></span>
+                            <span>by <button onClick={() => setSellerId(l.owner)} className="underline underline-offset-2 hover:text-foreground">{nameFor(l.owner)}</button></span>
                             <HumanBadge verified={verified === null ? null : verified.has(l.owner.toLowerCase())} />
                           </div>
                         </div>
@@ -993,7 +1102,7 @@ export default function Dashboard() {
                 <line x1="18" y1="6" x2="6" y2="18" />
               </svg>
             </button>
-            <McpDetails l={openListing} />
+            <McpDetails l={openListing} sellerName={nameFor(openListing.owner)} />
             <div className="mt-5 flex items-center gap-2">
               <button
                 onClick={() => addToAllowlist(openListing)}
@@ -1683,6 +1792,125 @@ function WithdrawModal({
         </>
       )}
     </ModalShell>
+  );
+}
+
+/**
+ * The balance agent payments actually draw on.
+ *
+ * Given its own card rather than folded into the treasury because they are
+ * genuinely two balances and conflating them produces the worst bug in this
+ * product: a wallet visibly full of USDC where every agent call fails with a
+ * signing error that mentions neither USDC nor balances. Funding is one-way and
+ * deliberate; what comes back out goes through Circle's withdrawal, which is
+ * why this does not offer a button for it.
+ */
+function AgentFunds({
+  available, onFund, onRefresh, hasWallet,
+}: {
+  available: number | null;
+  onFund: (amount: string) => Promise<void>;
+  onRefresh: () => void;
+  hasWallet: boolean;
+}) {
+  const [amount, setAmount] = useState('5');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+
+  const fund = async () => {
+    const n = Number(amount);
+    if (!Number.isFinite(n) || n <= 0) { setErr('Enter an amount above zero.'); return; }
+    setErr(null);
+    setBusy(true);
+    try {
+      await onFund(amount);
+      setOpen(false);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'That did not go through.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Empty and unknown are different states and must not look the same: one
+  // means top up, the other means we could not reach the chain.
+  const empty = available !== null && available <= 0;
+
+  return (
+    <div className="mt-8 rounded-xl border border-hairline bg-panel p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-medium">Agent spending balance</h2>
+          <p className="mt-1 max-w-prose text-[11px] leading-relaxed text-muted">
+            What Claude can spend on your behalf. It is held separately from your
+            treasury, because an x402 payment is authorised against this balance
+            rather than transferred out of your wallet. Topping it up is the one
+            step that decides how much an agent can ever spend without you.
+          </p>
+        </div>
+        <div className="text-right">
+          <div className="font-mono text-lg">
+            {available === null ? '—' : `$${formatUsdc(available)}`}
+          </div>
+          <button onClick={onRefresh} className="text-[10px] text-muted underline underline-offset-2 hover:text-foreground">
+            refresh
+          </button>
+        </div>
+      </div>
+
+      {available === null && hasWallet && (
+        <div className="mt-3 text-[11px] text-muted">
+          Could not read this balance just now. It is not necessarily empty.
+        </div>
+      )}
+      {empty && (
+        <div className="mt-3 rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-[11px] leading-relaxed text-amber-400">
+          Empty, so every agent payment will fail at signing time even though your
+          treasury has funds. Move some across to start.
+        </div>
+      )}
+
+      {open ? (
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <span className="flex items-center rounded-lg border border-hairline bg-background pl-2 focus-within:border-accent">
+            <span className="text-sm text-muted">$</span>
+            <input
+              autoFocus
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              inputMode="decimal"
+              className="w-20 bg-transparent px-1.5 py-2 text-sm outline-none"
+            />
+          </span>
+          <button
+            disabled={busy}
+            onClick={fund}
+            className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40"
+          >
+            {busy ? 'Confirm both in wallet…' : 'Move across'}
+          </button>
+          <button onClick={() => { setOpen(false); setErr(null); }} className="text-sm text-muted hover:text-foreground">
+            Cancel
+          </button>
+          <span className="w-full text-[10px] text-muted">
+            Two transactions: one to allow the Gateway contract to take it, one to deposit.
+          </span>
+        </div>
+      ) : (
+        <button
+          disabled={!hasWallet}
+          onClick={() => setOpen(true)}
+          className="mt-4 rounded-lg border border-hairline px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40"
+        >
+          Top up agent spending
+        </button>
+      )}
+
+      {err && (
+        <div className="mt-3 rounded-lg border border-red-400/30 bg-red-400/5 px-3 py-2 text-[11px] text-red-400">{err}</div>
+      )}
+    </div>
   );
 }
 
