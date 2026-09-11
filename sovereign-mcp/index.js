@@ -286,9 +286,56 @@ server.tool(
     let autonomousNote = '';
     if (hasAutonomousKeys()) {
       try {
-        const { output, settlement } = await settleAndCall(a, input);
+        const { output, settlement, undelivered } = await settleAndCall(a, input);
         const latencyMs = Date.now() - startedAt;
-        const delivered = output !== undefined && output !== null && output !== '';
+        const delivered = !undelivered && output !== undefined && output !== null && output !== '';
+
+        // The worker answered and said it could not do the job.
+        if (undelivered) {
+          // Two very different situations, and conflating them is how a human
+          // ends up paying twice or a broken worker keeps its score.
+          if (!settlement.paid) {
+            return { content: [{ type: 'text', text: [
+              `Agent: ${a.name} (${a.id}) — NOT DELIVERED. You were NOT charged.`,
+              `Reason: ${undelivered.reason}`,
+              undelivered.upstreamStatus ? `The worker's own service returned HTTP ${undelivered.upstreamStatus}.` : '',
+              `Took ${latencyMs}ms before failing.`,
+              ``,
+              `No payment settled, so there is nothing to rate and nothing to refund.`,
+              `Tell the user this worker is not answering right now, and offer to`,
+              `find another one with search_agents rather than retrying this one.`,
+            ].filter(Boolean).join('\n') }] };
+          }
+
+          // Money moved and nothing came back. This is the case the receipt
+          // system exists for: the rating is what stops the next buyer paying
+          // the same worker for the same nothing.
+          const reviewUrl = handoffLink('review', {
+            agentId: a.id,
+            agentName: a.name,
+            amountUsdc: settlement.amount,
+            expectation: want,
+            settlementRef: settlement.transaction || '',
+            latencyMs,
+            delivered: false,
+          });
+          return { content: [{ type: 'text', text: [
+            `Agent: ${a.name} (${a.id}) — PAID ${settlement.amount} USDC BUT NOTHING WAS DELIVERED.`,
+            settlement.transaction ? `Settlement tx: ${settlement.transaction}` : '',
+            `Reason: ${undelivered.reason}`,
+            `Took ${latencyMs}ms.`,
+            ``,
+            `Do NOT retry this worker and do NOT ask the user to pay again — the`,
+            `payment above already settled.`,
+            ``,
+            `FILE THE RECEIPT — opens the review prefilled as not delivered:`,
+            reviewUrl,
+            ``,
+            `Tell the user plainly that they were charged and got nothing, give`,
+            `them that link, and offer to find another worker.`,
+          ].filter(Boolean).join('\n') }] };
+        }
+
         // Everything needed to grade this call, carried into the web app so the
         // human confirms what happened instead of retyping it.
         const reviewUrl = handoffLink('review', {
@@ -317,7 +364,16 @@ server.tool(
           `the next buyer of this worker will see, so it is part of the job.`,
         ].filter(Boolean).join('\n') }] };
       } catch (e) {
-        autonomousNote = `(autonomous payment unavailable — ${e.message}; returning a manual payment intent)\n\n`;
+        // A throw here is genuinely ambiguous. GatewayClient throws on any
+        // non-2xx without reading the body, and a non-2xx can arrive either side
+        // of settlement — so "payment unavailable, here is a manual intent" is a
+        // guess, and the wrong guess invites the human to pay twice. Say so.
+        const afterQuote = /status\s+(4\d\d|5\d\d)/.test(String(e?.message ?? ''));
+        autonomousNote = afterQuote
+          ? `(the worker refused the call — ${e.message}. This MAY have happened after payment settled; ` +
+            `check the buyer's recent activity in the Sovereign app before paying again. ` +
+            `A manual payment intent follows, but do not use it until you have checked.)\n\n`
+          : `(autonomous payment unavailable — ${e.message}; returning a manual payment intent)\n\n`;
       }
     } else {
       const why = autonomousDisabledReason();

@@ -83,6 +83,21 @@ function getGatewayClient() {
  * Returns { output, settlement }. Throws on any misconfiguration or refusal so
  * `call_agent` can fall back to the keyless payment intent.
  */
+/**
+ * A worker that answers 200 but says it did not deliver.
+ *
+ * Sovereign-hosted workers report failure this way on purpose. GatewayClient
+ * throws away the body of any non-2xx, so a worker answering 502 would reach
+ * this agent as the string "Request failed with status 502" -- and the catch in
+ * call_agent would then tell the human "autonomous payment unavailable, here is
+ * a manual payment intent", inviting them to pay a second time for a call that
+ * may already have settled. The envelope exists so that cannot happen.
+ */
+function undeliveredEnvelope(data) {
+  const env = data && typeof data === 'object' ? data.sovereign : null;
+  return env && env.delivered === false ? env : null;
+}
+
 export async function settleAndCall(agent, input) {
   if (!agent?.endpoint || !/^https?:\/\//i.test(agent.endpoint)) {
     throw new Error('agent has no reachable endpoint');
@@ -96,11 +111,39 @@ export async function settleAndCall(agent, input) {
   });
 
   const body = result?.data ?? {};
+  const amount = result.formattedAmount ?? (Number(agent.pricePerCall) / 1e6).toString();
+
+  const failed = undeliveredEnvelope(body);
+  if (failed) {
+    // Never present this as output. A 200 whose payload says delivered:false is
+    // a failure that happened to arrive intact, and the only thing that matters
+    // next is whether money moved.
+    return {
+      output: null,
+      undelivered: {
+        reason: failed.reason || 'the worker did not return a usable response',
+        upstreamStatus: failed.upstreamStatus ?? null,
+        latencyMs: failed.latencyMs ?? null,
+      },
+      settlement: {
+        paid: failed.paid === true,
+        amount: failed.paid === true ? amount : '0',
+        asset: 'USDC',
+        payTo: agent.payTo,
+        network: CHAIN,
+        payer: gateway.address,
+        transaction: failed.settlement ?? null,
+        status: result.status,
+      },
+    };
+  }
+
   return {
     output: body.output ?? body,
+    undelivered: null,
     settlement: {
       paid: true,
-      amount: result.formattedAmount ?? (Number(agent.pricePerCall) / 1e6).toString(),
+      amount,
       asset: 'USDC',
       payTo: agent.payTo,
       network: CHAIN,
