@@ -17,6 +17,10 @@ export const ARC_CHAIN_ID = 5042002;
 export const USDC_DECIMALS = 18;
 const USDC_SCALE = 1e18;
 
+/** Public RPC. Used for plain eth_call reads that need no indexer. */
+export const ARC_RPC_URL =
+  process.env.NEXT_PUBLIC_ARC_RPC_URL || 'https://rpc.testnet.arc.network';
+
 export const ARC_EXPLORER =
   process.env.NEXT_PUBLIC_ARC_EXPLORER || 'https://testnet.arcscan.app';
 export const FAUCET_URL = 'https://faucet.circle.com';
