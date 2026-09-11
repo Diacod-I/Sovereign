@@ -1,0 +1,114 @@
+// app/lib/kv.ts
+// The smallest durable key-value store that works on Vercel.
+//
+// Two things in this app need to remember something across requests: hosted
+// worker configs, and the World ID nullifier replay guard. Both were previously
+// a Map in module scope, which on serverless means each instance has its own
+// copy and all of them forget on a cold start. For the nullifier guard that was
+// a documented weakness; for worker configs it would mean endpoints that stop
+// existing at random.
+//
+// Upstash's REST API is used rather than a Redis client because serverless has
+// nowhere to put a connection pool. With no credentials configured this falls
+// back to an in-process Map, so `npm run dev` needs no setup — but that fallback
+// is per-instance and forgetful, and says so loudly if anything writes to it.
+
+const URL_ = process.env.UPSTASH_REDIS_REST_URL || '';
+const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || '';
+
+export const kvConfigured = !!URL_ && !!TOKEN;
+
+const memory = new Map<string, string>();
+let warned = false;
+
+function warnOnce() {
+  if (warned || kvConfigured) return;
+  warned = true;
+  console.warn(
+    '[kv] UPSTASH_REDIS_REST_URL / _TOKEN are not set — using an in-process Map.\n' +
+    '     Fine for local development. On a deployment this loses every hosted\n' +
+    '     worker on the next cold start.',
+  );
+}
+
+async function command(args: (string | number)[]): Promise<unknown> {
+  const res = await fetch(URL_, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+    body: JSON.stringify(args),
+    cache: 'no-store',
+  });
+  if (!res.ok) throw new Error(`kv ${args[0]} failed: HTTP ${res.status}`);
+  const json = (await res.json()) as { result?: unknown; error?: string };
+  if (json.error) throw new Error(`kv ${args[0]} failed: ${json.error}`);
+  return json.result ?? null;
+}
+
+export async function kvGet(key: string): Promise<string | null> {
+  warnOnce();
+  if (!kvConfigured) return memory.get(key) ?? null;
+  const r = await command(['GET', key]);
+  return typeof r === 'string' ? r : null;
+}
+
+export async function kvSet(key: string, value: string): Promise<void> {
+  warnOnce();
+  if (!kvConfigured) { memory.set(key, value); return; }
+  await command(['SET', key, value]);
+}
+
+export async function kvDel(key: string): Promise<void> {
+  warnOnce();
+  if (!kvConfigured) { memory.delete(key); return; }
+  await command(['DEL', key]);
+}
+
+/**
+ * Set only if absent. Used where the whole point is that two callers racing for
+ * the same key must not both win — a slug claim, or one human claiming one
+ * account. A read-then-write would let both through.
+ */
+export async function kvSetIfAbsent(key: string, value: string): Promise<boolean> {
+  warnOnce();
+  if (!kvConfigured) {
+    if (memory.has(key)) return false;
+    memory.set(key, value);
+    return true;
+  }
+  const r = await command(['SET', key, value, 'NX']);
+  return r !== null;
+}
+
+/** Members of a set — used to list one owner's workers without scanning keys. */
+export async function kvSetAdd(key: string, member: string): Promise<void> {
+  warnOnce();
+  if (!kvConfigured) {
+    const cur = memory.get(key);
+    const list: string[] = cur ? JSON.parse(cur) : [];
+    if (!list.includes(member)) list.push(member);
+    memory.set(key, JSON.stringify(list));
+    return;
+  }
+  await command(['SADD', key, member]);
+}
+
+export async function kvSetMembers(key: string): Promise<string[]> {
+  warnOnce();
+  if (!kvConfigured) {
+    const cur = memory.get(key);
+    return cur ? (JSON.parse(cur) as string[]) : [];
+  }
+  const r = await command(['SMEMBERS', key]);
+  return Array.isArray(r) ? (r as string[]) : [];
+}
+
+export async function kvSetRemove(key: string, member: string): Promise<void> {
+  warnOnce();
+  if (!kvConfigured) {
+    const cur = memory.get(key);
+    const list: string[] = cur ? JSON.parse(cur) : [];
+    memory.set(key, JSON.stringify(list.filter((m) => m !== member)));
+    return;
+  }
+  await command(['SREM', key, member]);
+}
