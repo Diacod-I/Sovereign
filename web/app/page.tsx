@@ -12,8 +12,14 @@ import Copyable from './components/Copyable';
 // PixelBlast is WebGL — load client-only so it mounts into a sized container (no blank SSR canvas)
 const PixelBlast = dynamic(() => import('./components/PixelBlast'), { ssr: false }) as any;
 
+/**
+ * `img` takes a .gif or a .mp4/.webm indifferently; the carousel chooses <img>
+ * or <video> from the extension. Prefer video: the same clip at the same size is
+ * roughly thirty times smaller as H.264 than as a GIF, and a 30MB GIF is a card
+ * that stays blank for the first several seconds of every visit.
+ */
 const FEATURES = [
-  { n: '01', t: 'Set the rules once', d: 'Give each agent a budget, an allowlist, and an approval threshold.', img: '/hero_gif_1.gif' },
+  { n: '01', t: 'Set the rules once', d: 'Give each agent a budget, an allowlist, and an approval threshold.', img: '/hero1.mp4' },
   { n: '02', t: 'Agents pay on their own', d: 'They find services and pay per use in USDC — always within your limits.', img: '/features/pay.gif' },
   { n: '03', t: 'Big spends wait for you', d: 'Anything over the line pauses for a one-tap human approval.', img: '/features/approve.gif' },
   { n: '04', t: 'Everything is on record', d: 'Reputation and audit live on-chain, not in a black box.', img: '/features/audit.gif' },

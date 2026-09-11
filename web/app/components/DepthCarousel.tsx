@@ -25,6 +25,17 @@ interface ItemObject {
 const normalizeItem = (it: string | ItemObject): ItemObject => 
   typeof it === 'string' ? { image: it, alt: '' } : it;
 
+/**
+ * Whether a card's media should be played rather than shown.
+ *
+ * Decided from the file extension, so a caller swaps a .gif for a .mp4 in one
+ * place and nothing else has to be told. An item can override with an explicit
+ * `video: true` for a URL that serves video without saying so in its path.
+ */
+const VIDEO_RE = /\.(mp4|webm|ogv|ogg|mov|m4v)(?:[?#]|$)/i;
+const isVideo = (item: ItemObject): boolean =>
+  typeof item.video === 'boolean' ? item.video : VIDEO_RE.test(item.image || '');
+
 
 /** How often autoplay re-checks whether the pointer has left, while paused. */
 const HOVER_POLL_MS = 400;
@@ -75,6 +86,41 @@ const DepthCarousel = forwardRef<any, any>(({
   const reducedRef = useRef(false);
   /** Restarts the autoplay slot. Set by the autoplay effect, null when it is off. */
   const armRef = useRef(null);
+  const videoRefs = useRef([]);
+
+  /**
+   * Attach a video card, and mute it properly.
+   *
+   * The JSX `muted` attribute is not enough on its own. React assigns props in
+   * order and the browser evaluates its autoplay policy the moment the element
+   * is inserted, so if `autoplay` lands before `muted` the policy sees an
+   * element that could make noise and refuses -- once, silently, with the
+   * rejected play() promise the only trace. Setting the property here, as the
+   * element is attached, is the long-standing workaround. `defaultMuted` is set
+   * too so the muting survives a later load().
+   */
+  const attachVideo = (index, el) => {
+    videoRefs.current[index] = el;
+    if (!el) return;
+    el.muted = true;
+    el.defaultMuted = true;
+  };
+
+  /**
+   * Start a video card if it is not already running.
+   *
+   * Re-muting first because this is also called from a click, and a refusal
+   * there would be the one case a viewer actually notices. The rejection is
+   * swallowed: a browser declining to autoplay is a policy decision, not a
+   * fault, and there is nothing useful to do about it beyond the click path
+   * that already exists.
+   */
+  const tryPlay = (el) => {
+    if (!el || !el.paused) return;
+    el.muted = true;
+    const p = el.play?.();
+    if (p && typeof p.catch === 'function') p.catch(() => {});
+  };
 
   const [active, setActive] = useState(0);
 
@@ -299,6 +345,10 @@ const DepthCarousel = forwardRef<any, any>(({
   const onCardClick = useCallback(
     index => {
       if (dragRef.current?.moved) return;
+      // Before setFocus, so the gesture and the play() are in the same task and
+      // the browser still counts this as user-initiated. The media itself has
+      // pointer-events: none, so this click is the only way in.
+      tryPlay(videoRefs.current[index]);
       setFocus(index, true);
     },
     [setFocus]
@@ -368,6 +418,29 @@ const DepthCarousel = forwardRef<any, any>(({
     };
   }, [autoplay, autoplayDelay, count, navigateBy]);
 
+  /**
+   * Honour prefers-reduced-motion for video cards.
+   *
+   * Done here rather than with `autoPlay={!reduced}` because autoplay is only
+   * consulted when the element loads: flipping the attribute after hydration
+   * neither starts nor stops anything. Pausing is also reversible, so a viewer
+   * who changes the setting with the page open gets the clips back.
+   */
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const apply = () => {
+      videoRefs.current.forEach(v => {
+        if (!v) return;
+        if (mq.matches) v.pause();
+        else tryPlay(v);
+      });
+    };
+    apply();
+    mq.addEventListener?.('change', apply);
+    return () => mq.removeEventListener?.('change', apply);
+  }, [count]);
+
   useEffect(() => {
     layout(posRef.current);
   }, [layout, depth, spread, tilt, tiltDirection, visibleCards, falloff, blur, cardWidth, cardHeight, radius, count]);
@@ -408,7 +481,41 @@ const DepthCarousel = forwardRef<any, any>(({
             aria-hidden={active !== i}
             onClick={() => onCardClick(i)}
           >
-            <img className="depth-carousel__img" src={item.image} alt={item.alt || ''} draggable={false} />
+            {isVideo(item) ? (
+              <video
+                className="depth-carousel__video"
+                src={item.image}
+                poster={item.poster}
+                aria-label={item.alt || undefined}
+                // muted + playsInline are what make autoplay legal on mobile;
+                // without both, iOS silently refuses to start and the card sits
+                // on a black frame.
+                muted
+                playsInline
+                loop
+                autoPlay
+                preload="auto"
+                tabIndex={-1}
+                ref={el => attachVideo(i, el)}
+                // A missing or undecodable file is otherwise a silent black
+                // rectangle that also refuses to play when clicked, which looks
+                // exactly like an autoplay problem and is not one. Say which
+                // file, because the usual cause is a path that does not match
+                // what is in /public.
+                onError={() => {
+                  console.error(
+                    `[DepthCarousel] could not load "${item.image}". Check the file exists in /public and the path matches.`,
+                  );
+                }}
+              />
+            ) : (
+              <img
+                className="depth-carousel__img"
+                src={item.image}
+                alt={item.alt || ''}
+                draggable={false}
+              />
+            )}
             <span
               className="depth-carousel__tint"
               ref={el => (overlayRefs.current[i] = el)}
