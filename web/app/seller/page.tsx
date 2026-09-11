@@ -23,6 +23,15 @@ import { fetchVerification } from '../lib/verification';
 import { readProfile, writeProfile } from '../lib/profile';
 
 type Tab = 'workers' | 'profile';
+
+/**
+ * The test bench is built and tested but not shown yet.
+ *
+ * Hidden rather than deleted: the component, its API route and the saved cases
+ * all still work, so bringing it back is this one boolean. Deleting it would
+ * mean rebuilding a feature that already passes its tests.
+ */
+const SHOW_TEST_BENCH = false;
 type Agent = RegistryAgent;
 
 const short = (a: string) => a.slice(0, 6) + '…' + a.slice(-4);
@@ -71,7 +80,6 @@ export default function SellerDashboard() {
    */
   const [hosting, setHosting] = useState<'hosted' | 'own'>('hosted');
   /** Slug of the hosted worker backing the current form, if any. */
-  const [hostedSlug, setHostedSlug] = useState<string | null>(null);
 
   // profile
   const [pName, setPName] = useState('');
@@ -193,7 +201,6 @@ export default function SellerDashboard() {
       setF({ name: '', desc: '', tags: '', price: '', endpoint: '', payTo: '', cover: '' });
       setProbe(null);
       setForceList(false);
-      setHostedSlug(null);
       setHosting('hosted');
       setShowNew(false);
       setTab('workers');
@@ -341,7 +348,7 @@ export default function SellerDashboard() {
                               {a.active ? 'Deactivate' : 'Reactivate'}
                             </button>
                           </div>
-                          {hostedSlugOf(a.endpoint) && (
+                          {SHOW_TEST_BENCH && hostedSlugOf(a.endpoint) && (
                             <button
                               onClick={() => setBenchFor(benchFor === a.id ? null : a.id)}
                               className="mt-2 w-full rounded-lg border border-hairline px-3 py-1.5 text-[11px] text-muted transition-colors hover:text-foreground"
@@ -356,7 +363,7 @@ export default function SellerDashboard() {
                 </div>
               )}
 
-              {benchFor && (() => {
+              {SHOW_TEST_BENCH && benchFor && (() => {
                 const a = agents.find((x) => x.id === benchFor);
                 const slug = a ? hostedSlugOf(a.endpoint) : null;
                 if (!a || !slug) return null;
@@ -616,11 +623,11 @@ export default function SellerDashboard() {
                       name={f.name}
                       price={f.price}
                       payTo={f.payTo.trim() || walletAddress || ''}
-                      onHosted={(url, slug) => { setF((prev) => ({ ...prev, endpoint: url })); setHostedSlug(slug); setProbe(null); setForceList(false); }}
+                      onHosted={(url) => { setF((prev) => ({ ...prev, endpoint: url })); setProbe(null); setForceList(false); }}
                     />
                   ) : (
                     <label className="text-sm"><span className="text-muted">Endpoint URL (x402-gated)</span>
-                      <input value={f.endpoint} onChange={(e) => { setF({ ...f, endpoint: e.target.value }); setProbe(null); setForceList(false); setHostedSlug(null); }} placeholder="https://…" className="mt-1 w-full rounded-lg border border-hairline bg-panel px-3 py-2 outline-none focus:border-accent" /></label>
+                      <input value={f.endpoint} onChange={(e) => { setF({ ...f, endpoint: e.target.value }); setProbe(null); setForceList(false); }} placeholder="https://…" className="mt-1 w-full rounded-lg border border-hairline bg-panel px-3 py-2 outline-none focus:border-accent" /></label>
                   )}
                 </div>
               </div>
@@ -658,7 +665,7 @@ export default function SellerDashboard() {
               >
                 {txPending ? 'Confirm in wallet…' : probe?.ok ? 'List verified worker' : 'List worker'}
               </button>
-              <button onClick={() => { setShowNew(false); setProbe(null); setForceList(false); setHostedSlug(null); }} className="rounded-lg border border-hairline px-4 py-2.5 text-sm text-muted hover:text-foreground">Cancel</button>
+              <button onClick={() => { setShowNew(false); setProbe(null); setForceList(false); }} className="rounded-lg border border-hairline px-4 py-2.5 text-sm text-muted hover:text-foreground">Cancel</button>
             </div>
           </div>
         </div>
