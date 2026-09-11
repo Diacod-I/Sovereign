@@ -9,76 +9,17 @@
 // our own infrastructure is an SSRF primitive unless it is guarded — the classic
 // target being cloud metadata at 169.254.169.254.
 
-import dns from 'node:dns/promises';
-import net from 'node:net';
 import { parseUnits } from 'viem';
 import type { ProbeCheck, ProbeQuote, ProbeResult } from '../../lib/probe';
+// The guard moved to lib/ssrf so the hosted worker proxy uses the same one. Two
+// copies of an SSRF check is one copy that quietly falls behind.
+import { ALLOW_PRIVATE, assertPublicHost } from '../../lib/ssrf';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const TIMEOUT_MS = 10_000;
 const MAX_BODY = 256 * 1024;
-
-// Local development needs to probe a worker on localhost; production must never.
-const ALLOW_PRIVATE = process.env.ALLOW_PRIVATE_PROBE === 'true';
-
-// ---------------------------------------------------------------- SSRF guard
-
-function ipv4IsPrivate(ip: string): boolean {
-  const p = ip.split('.').map(Number);
-  if (p.length !== 4 || p.some((n) => Number.isNaN(n))) return true;
-  const [a, b] = p;
-  if (a === 0 || a === 10 || a === 127) return true;              // this-network, private, loopback
-  if (a === 169 && b === 254) return true;                        // link-local — cloud metadata
-  if (a === 172 && b >= 16 && b <= 31) return true;               // private
-  if (a === 192 && b === 168) return true;                        // private
-  if (a === 192 && b === 0) return true;                          // IETF protocol assignments
-  if (a === 100 && b >= 64 && b <= 127) return true;              // CGNAT
-  if (a === 198 && (b === 18 || b === 19)) return true;           // benchmarking
-  if (a >= 224) return true;                                      // multicast + reserved
-  return false;
-}
-
-function ipIsPrivate(ip: string): boolean {
-  const v = net.isIP(ip);
-  if (v === 4) return ipv4IsPrivate(ip);
-  if (v === 6) {
-    const lower = ip.toLowerCase();
-    if (lower === '::' || lower === '::1') return true;
-    // IPv4-mapped (::ffff:10.0.0.1) inherits the v4 rules.
-    const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-    if (mapped) return ipv4IsPrivate(mapped[1]);
-    if (/^f[cd]/.test(lower)) return true;                        // unique local
-    if (/^fe[89ab]/.test(lower)) return true;                     // link local
-    return false;
-  }
-  return true;
-}
-
-/** Resolves the host and rejects if ANY answer lands in private space. */
-async function assertPublicHost(hostname: string): Promise<string> {
-  if (net.isIP(hostname)) {
-    if (ipIsPrivate(hostname)) throw new Error(`${hostname} is a private address`);
-    return hostname;
-  }
-  const lower = hostname.toLowerCase();
-  if (lower === 'localhost' || lower.endsWith('.localhost') || lower.endsWith('.local') || lower.endsWith('.internal')) {
-    throw new Error(`${hostname} resolves to this machine`);
-  }
-  let answers;
-  try {
-    answers = await dns.lookup(hostname, { all: true });
-  } catch {
-    throw new Error(`DNS lookup failed for ${hostname}`);
-  }
-  if (!answers.length) throw new Error(`${hostname} does not resolve`);
-  // Check every answer — a host with one public and one private record is an attack.
-  for (const a of answers) {
-    if (ipIsPrivate(a.address)) throw new Error(`${hostname} resolves to private address ${a.address}`);
-  }
-  return answers[0].address;
-}
 
 // ---------------------------------------------------------------- helpers
 
