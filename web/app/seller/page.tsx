@@ -1,35 +1,31 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { usePrivy } from '@privy-io/react-auth';
 import { useRouter } from 'next/navigation';
-import Brand from '../components/Brand';
+import SideNav, { tabFromUrl } from '../components/SideNav';
 import Copyable from '../components/Copyable';
 import Cover from '../components/Cover';
 import Avatar from '../components/Avatar';
-import { useWalletData, useWithdraw, BalanceCard, ActivityFeed, DepositModal, WithdrawModal } from '../components/wallet';
-import { buildBalanceSeries, fetchAgentsByOwner, fetchReceived, formatUsdc, txUrl, type RangeKey, type RegistryAgent } from '../lib/arc';
+import { fetchAgentsByOwner, txUrl, type RegistryAgent } from '../lib/arc';
+import { SITE_URL } from '../lib/hosted';
 import { useRegistry, type ListingInput } from '../lib/registry';
 import WorldVerify from '../components/WorldVerify';
+import VerifyGate from '../components/VerifyGate';
+import Onboarding from '../components/Onboarding';
 import EndpointProbe from '../components/EndpointProbe';
+import HostedWorkerForm from '../components/HostedWorkerForm';
+import TestBench from '../components/TestBench';
 import type { ProbeResult } from '../lib/probe';
 import { useEmbeddedWallet } from '../lib/useEmbeddedWallet';
-import { readVerification, shortNullifier, levelLabel, type SellerVerification } from '../lib/world';
+import { readVerification, mergeVerification, shortNullifier, levelLabel, type SellerVerification } from '../lib/world';
+import { fetchVerification } from '../lib/verification';
+import { readProfile, writeProfile } from '../lib/profile';
 
-type Tab = 'overview' | 'agents' | 'profile';
+type Tab = 'workers' | 'profile';
 type Agent = RegistryAgent;
 
 const short = (a: string) => a.slice(0, 6) + '…' + a.slice(-4);
-
-function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="rounded-xl border border-hairline bg-panel p-5">
-      <div className="font-mono text-[11px] uppercase tracking-wider text-muted">{label}</div>
-      <div className="mt-2 text-2xl font-semibold tracking-tight">{value}</div>
-      {sub && <div className="mt-1 text-xs text-muted">{sub}</div>}
-    </div>
-  );
-}
 
 function Pill({ kind }: { kind: string }) {
   const map: Record<string, string> = { active: 'text-accent', paused: 'text-muted' };
@@ -47,7 +43,9 @@ export default function SellerDashboard() {
 
   const [seller, setSeller] = useState<string | null>(null);
   const [sellerReady, setSellerReady] = useState(false);
-  const [tab, setTab] = useState<Tab>('overview');
+  // Shown when an unverified account reaches for something other people will see.
+  const [gate, setGate] = useState(false);
+  const [tab, setTab] = useState<Tab>('workers');
 
   // live agents this wallet has registered on-chain (The Graph)
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -60,57 +58,68 @@ export default function SellerDashboard() {
   const [txError, setTxError] = useState<string | null>(null);
   const [txNote, setTxNote] = useState<{ msg: string; hash: string } | null>(null);
 
-  // top earner (most USDC received at a worker's payout address)
-  const [topEarner, setTopEarner] = useState<{ name: string; amount: number } | null>(null);
-  const [topLoading, setTopLoading] = useState(false);
-
   const [showNew, setShowNew] = useState(false);
   const [f, setF] = useState({ name: '', desc: '', tags: '', price: '', endpoint: '', payTo: '', cover: '' });
   // Result of the pre-listing endpoint check. Registering is gated on this so a
   // dead or mispriced endpoint cannot reach the marketplace by accident.
   const [probe, setProbe] = useState<ProbeResult | null>(null);
   const [forceList, setForceList] = useState(false);
+  /**
+   * How this worker will be reached. 'hosted' is the default because it is the
+   * only one a person without a server can finish: the alternative asks them to
+   * already own an x402-gated URL, which was the whole barrier.
+   */
+  const [hosting, setHosting] = useState<'hosted' | 'own'>('hosted');
+  /** Slug of the hosted worker backing the current form, if any. */
+  const [hostedSlug, setHostedSlug] = useState<string | null>(null);
 
   // profile
   const [pName, setPName] = useState('');
   const [pBio, setPBio] = useState('');
   const [profileSaved, setProfileSaved] = useState(false);
+  // Profile reads as a page by default and only becomes a form on request. Edits
+  // go to a draft so Cancel discards rather than silently keeping them.
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [draftName, setDraftName] = useState('');
+  const [draftBio, setDraftBio] = useState('');
   const [worldV, setWorldV] = useState<SellerVerification | null>(null);
 
   // worker edit modal
   const [editId, setEditId] = useState<string | null>(null);
+  /** Which worker's test bench is open. Opening it costs a signature, so it is
+   *  never opened for them. */
+  const [benchFor, setBenchFor] = useState<string | null>(null);
 
   // live wallet (same Privy embedded wallet as the buyer view). Resolved via
   // useEmbeddedWallet so a MetaMask login still signs with the embedded wallet.
   const embedded = useEmbeddedWallet();
   const walletAddress = embedded.address;
-  const wallet = useWalletData(walletAddress);
-  const withdraw = useWithdraw(walletAddress, wallet.reload);
   const registry = useRegistry(walletAddress);
-  const [range, setRange] = useState<RangeKey>('1w');
-  const [showDeposit, setShowDeposit] = useState(false);
-  const [showWithdraw, setShowWithdraw] = useState(false);
-
-  const series = useMemo(() => buildBalanceSeries(wallet.history, wallet.balance ?? 0, range), [wallet.history, wallet.balance, range]);
-  const feed = useMemo(() => wallet.txs.filter((t) => t.ts > 0), [wallet.txs]);
 
   useEffect(() => {
     if (ready && !authenticated) router.replace('/');
   }, [ready, authenticated, router]);
 
   useEffect(() => {
-    try {
-      const s = localStorage.getItem('sovereign_seller');
-      if (s) { setSeller(s); setPName(s); }
-      const b = localStorage.getItem('sovereign_seller_bio');
-      if (b) setPBio(b);
-    } catch {}
+    const p = readProfile();
+    if (p) { setSeller(p.name); setPName(p.name); setPBio(p.bio); }
+    const fromUrl = tabFromUrl(['workers', 'profile']);
+    if (fromUrl) setTab(fromUrl as Tab);
     setSellerReady(true);
   }, []);
 
-  // Real World ID state for this wallet (minimal tier — persisted locally by WorldVerify).
+  // Local cache first so the badge does not flicker, then the chain, which is the
+  // record everyone else reads. The chain wins: a local badge with no on-chain row
+  // is a verification that was never published.
   useEffect(() => {
     setWorldV(readVerification(walletAddress));
+    if (!walletAddress) return;
+    let alive = true;
+    fetchVerification(walletAddress).then((onChain) => {
+      if (!alive) return;
+      setWorldV((local) => mergeVerification(local, onChain, walletAddress));
+    });
+    return () => { alive = false; };
   }, [walletAddress]);
 
   // Load the agents this wallet owns from the subgraph.
@@ -134,31 +143,18 @@ export default function SellerDashboard() {
 
   const activeCount = agents.filter((a) => a.active).length;
 
-  // Compute the top-earning worker by summing USDC received at each distinct payout address.
-  useEffect(() => {
-    if (agentsLoading || agents.length === 0) { setTopEarner(null); return; }
-    let alive = true;
-    setTopLoading(true);
-    const byPayTo = new Map<string, string>();
-    for (const a of agents) {
-      const key = a.payTo.toLowerCase();
-      if (!byPayTo.has(key)) byPayTo.set(key, a.name);
-    }
-    Promise.all(
-      [...byPayTo.entries()].map(async ([addr, name]) => ({ name, amount: await fetchReceived(addr).catch(() => 0) }))
-    ).then((rows) => {
-      if (!alive) return;
-      const top = rows.slice().sort((x, y) => y.amount - x.amount)[0] || null;
-      setTopEarner(top);
-      setTopLoading(false);
-    });
-    return () => { alive = false; };
-  }, [agents, agentsLoading]);
+  /** The slug, if this listing points at a Sovereign-hosted endpoint. */
+  const hostedSlugOf = (endpoint: string): string | null => {
+    const prefix = `${SITE_URL}/w/`;
+    if (!endpoint.startsWith(prefix)) return null;
+    const rest = endpoint.slice(prefix.length).split(/[/?#]/)[0];
+    return rest || null;
+  };
 
   if (!ready || !authenticated || !sellerReady) return null;
 
   if (!seller) {
-    return <SellerOnboarding user={user} logout={logout} onDone={(name) => { try { localStorage.setItem('sovereign_seller', name); } catch {} setSeller(name); }} />;
+    return <Onboarding logout={logout} onDone={(p) => { setSeller(p.name); setPName(p.name); setPBio(p.bio); }} />;
   }
 
   const fToInput = (): ListingInput => ({
@@ -170,7 +166,7 @@ export default function SellerDashboard() {
     payTo: f.payTo.trim() || walletAddress || '',
   });
 
-  const createAgent = async () => {
+  const createWorker = async () => {
     const input = fToInput();
     if (!input.name || !input.price || txPending) return;
     if (!input.endpoint) {
@@ -186,7 +182,7 @@ export default function SellerDashboard() {
       setTxError('The endpoint check failed. Fix it, or tick “list anyway” to publish it as-is.');
       return;
     }
-    setTxError(null); setTxNote(null); setTxPending('Registering agent on-chain…');
+    setTxError(null); setTxNote(null); setTxPending('Registering worker on-chain…');
     try {
       const { hash, id } = await registry.register(input);
       setAgents((list) => [
@@ -197,8 +193,10 @@ export default function SellerDashboard() {
       setF({ name: '', desc: '', tags: '', price: '', endpoint: '', payTo: '', cover: '' });
       setProbe(null);
       setForceList(false);
+      setHostedSlug(null);
+      setHosting('hosted');
       setShowNew(false);
-      setTab('agents');
+      setTab('workers');
       reloadAgentsSoon();
     } catch (e: any) {
       setTxError(e?.message ? String(e.message) : 'Transaction failed or was rejected.');
@@ -224,7 +222,7 @@ export default function SellerDashboard() {
     }
   };
 
-  const updateAgent = async (id: string, input: ListingInput): Promise<void> => {
+  const updateWorker = async (id: string, input: ListingInput): Promise<void> => {
     if (txPending) return;
     setTxError(null); setTxNote(null); setTxPending(`Updating “${input.name}”…`);
     try {
@@ -241,92 +239,49 @@ export default function SellerDashboard() {
   };
   const editing = agents.find((a) => a.id === editId) || null;
 
-  const saveProfile = () => {
-    const nm = pName.trim();
-    if (!nm) return;
-    setSeller(nm);
-    try {
-      localStorage.setItem('sovereign_seller', nm);
-      localStorage.setItem('sovereign_seller_bio', pBio);
-    } catch {}
-    setProfileSaved(true);
+  const startEditProfile = () => {
+    setDraftName(pName || seller || '');
+    setDraftBio(pBio);
+    setProfileSaved(false);
+    setEditingProfile(true);
   };
 
-  const NAV: { id: Tab; label: string }[] = [
-    { id: 'overview', label: 'Overview' },
-    { id: 'agents', label: 'My Workers' },
-    { id: 'profile', label: 'Profile' },
-  ];
+  const saveProfile = () => {
+    const nm = draftName.trim();
+    if (!nm) return;
+    setPName(nm);
+    setPBio(draftBio);
+    setSeller(nm);
+    writeProfile({ name: nm, bio: draftBio });
+    setEditingProfile(false);
+    setProfileSaved(true);
+  };
 
   return (
     <div className="flex h-screen overflow-hidden">
       {/* Sidebar */}
-      <aside className="flex w-60 shrink-0 flex-col border-r border-hairline bg-panel px-4 py-5 mt-1">
-        <div className="px-2">
-          <Brand tag="for Sellers" />
-        </div>
-        <nav className="mt-6 flex flex-col gap-1">
-          {NAV.map((n) => {
-            const on = tab === n.id;
-            return (
-              <button
-                key={n.id}
-                onClick={() => setTab(n.id)}
-                className={`rounded-lg px-3 py-2 text-left text-sm transition-colors ${on ? 'bg-[#1c1c1c] text-foreground' : 'text-muted hover:text-foreground'}`}
-              >
-                {n.label}
-              </button>
-            );
-          })}
-        </nav>
-        <div className="mt-auto border-t border-hairline pt-4">
-          <div className="px-3 text-sm font-medium">{seller}</div>
-          {walletAddress ? (
-            <div className="px-3"><Copyable value={walletAddress} className="font-mono text-[11px] text-muted hover:text-foreground">{short(walletAddress)}</Copyable></div>
-          ) : (
-            <div className="truncate px-3 font-mono text-[11px] text-muted">{user?.email?.address ?? 'account'}</div>
-          )}
-          <button onClick={() => router.push('/dashboard')} className="mt-3 w-full rounded-lg px-3 py-2 text-left text-sm text-muted transition-colors hover:text-foreground">Switch to buying →</button>
-          <button onClick={logout} className="mt-1 w-full rounded-lg px-3 py-2 text-left text-sm text-muted transition-colors hover:text-red-400">Sign out</button>
-        </div>
-      </aside>
+      <SideNav
+        route="seller"
+        tab={tab}
+        onTab={(t) => setTab(t as Tab)}
+        name={seller}
+        address={walletAddress}
+        fallback={user?.email?.address}
+        onSignOut={logout}
+      />
 
       {/* Main */}
       <main className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-4xl px-8 py-8">
 
-          {tab === 'overview' && (
-            <>
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div>
-                  <h1 className="text-2xl font-semibold tracking-tight">Overview</h1>
-                  <p className="mt-1 text-sm text-muted">What your agents are earning across the marketplace.</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button onClick={() => setShowDeposit(true)} className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-black transition-opacity hover:opacity-90">Add funds</button>
-                  <button onClick={() => setShowWithdraw(true)} className="rounded-lg border border-hairline px-4 py-2 text-sm text-muted transition-colors hover:text-foreground">Withdraw</button>
-                </div>
-              </div>
-              <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
-                <Stat label="Balance" value={wallet.balance === null ? '—' : formatUsdc(wallet.balance)} sub={wallet.error ? 'balance unavailable' : 'USDC on Arc'} />
-                <Stat label="Active agents" value={agentsLoading ? '—' : String(activeCount)} sub={agentsError ? 'unavailable' : 'live on-chain'} />
-                <Stat label="Top earner" value={topLoading || !topEarner ? '—' : `${formatUsdc(topEarner.amount)}`} sub={topEarner ? topEarner.name : 'no earnings yet'} />
-              </div>
-
-              <BalanceCard series={series} range={range} setRange={setRange} loading={wallet.loading} error={wallet.error} hasWallet={!!walletAddress} onAdd={() => setShowDeposit(true)} />
-
-              <ActivityFeed items={feed} loading={wallet.loading} error={wallet.error} title="Settlements & activity" />
-            </>
-          )}
-
-          {tab === 'agents' && (
+          {tab === 'workers' && (
             <>
               <div className="flex items-center justify-between">
                 <div>
-                  <h1 className="text-2xl font-semibold tracking-tight">My Agents</h1>
-                  <p className="mt-1 text-sm text-muted">The agents you&apos;ve listed for others to hire.</p>
+                  <h1 className="text-2xl font-semibold tracking-tight">Workers</h1>
+                  <p className="mt-1 text-sm text-muted">The workers you have listed for others to hire.</p>
                 </div>
-                <button onClick={() => setShowNew(true)} className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-black transition-opacity hover:opacity-90">List new agent</button>
+                <button onClick={() => (worldV ? setShowNew(true) : setGate(true))} className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-black transition-opacity hover:opacity-90">List new worker</button>
               </div>
 
               {txPending && (
@@ -346,11 +301,11 @@ export default function SellerDashboard() {
               )}
 
               {agentsLoading ? (
-                <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-muted">Loading your agents from the subgraph…</div>
+                <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-muted">Loading your workers from the subgraph…</div>
               ) : agentsError ? (
                 <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-red-400">{agentsError}</div>
               ) : agents.length === 0 ? (
-                <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-muted">You haven&apos;t registered any agents from this wallet yet.</div>
+                <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-muted">You have not listed any workers from this wallet yet.</div>
               ) : (
                 <div className="mt-6 grid gap-3 sm:grid-cols-2">
                   {agents.map((a) => {
@@ -386,87 +341,243 @@ export default function SellerDashboard() {
                               {a.active ? 'Deactivate' : 'Reactivate'}
                             </button>
                           </div>
+                          {hostedSlugOf(a.endpoint) && (
+                            <button
+                              onClick={() => setBenchFor(benchFor === a.id ? null : a.id)}
+                              className="mt-2 w-full rounded-lg border border-hairline px-3 py-1.5 text-[11px] text-muted transition-colors hover:text-foreground"
+                            >
+                              {benchFor === a.id ? 'Hide test bench' : 'Test bench'}
+                            </button>
+                          )}
                         </div>
                       </div>
                     );
                   })}
                 </div>
               )}
+
+              {benchFor && (() => {
+                const a = agents.find((x) => x.id === benchFor);
+                const slug = a ? hostedSlugOf(a.endpoint) : null;
+                if (!a || !slug) return null;
+                return (
+                  <div className="mt-4">
+                    <div className="mb-2 text-[11px] text-muted">
+                      Testing <span className="text-foreground">{a.name}</span>
+                    </div>
+                    <TestBench walletAddress={walletAddress} slug={slug} />
+                  </div>
+                );
+              })()}
             </>
           )}
 
           {tab === 'profile' && (
             <>
-              <h1 className="text-2xl font-semibold tracking-tight">Profile</h1>
-              <p className="mt-1 text-sm text-muted">How buyers see you across the marketplace.</p>
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <h1 className="text-2xl font-semibold tracking-tight">Profile</h1>
+                  <p className="mt-1 text-sm text-muted">
+                    {editingProfile ? 'Editing how you appear to buyers.' : 'How buyers see you across the marketplace.'}
+                  </p>
+                </div>
+                {!editingProfile && (
+                  <button
+                    onClick={startEditProfile}
+                    className="rounded-lg border border-hairline px-4 py-2 text-sm text-muted transition-colors hover:text-foreground"
+                  >
+                    Edit profile
+                  </button>
+                )}
+              </div>
 
-              <div className="mt-6 rounded-xl border border-hairline bg-panel p-6">
-                <div className="flex items-center gap-4">
-                  <Avatar name={pName || seller || 'S'} size={56} />
-                  <div>
-                    <div className="font-medium">{pName || seller}</div>
+              {/* ---------- view: the page, not the form ---------- */}
+              {!editingProfile && (
+                <div className="mt-6 rounded-xl border border-hairline bg-panel">
+                  <Cover name={pName || seller || 'S'} className="overflow-hidden rounded-t-xl" />
+
+                  <div className="px-6 pb-6">
+                    <div className="-mt-10 flex items-end gap-4">
+                      {/* Avatar is drawn at 12% alpha, so without an opaque fill
+                          behind it the cover gradient shows through the overlapping
+                          half and the circle reads as cropped. bg-panel gives it
+                          something solid to sit on; z-10 keeps it above the cover. */}
+                      <span className="relative z-10 inline-flex shrink-0 rounded-full border-4 border-panel bg-panel">
+                        <Avatar name={pName || seller || 'S'} size={72} />
+                      </span>
+                      {profileSaved && <span className="mb-2 text-sm text-accent">Saved</span>}
+                    </div>
+
+                    <h2 className="mt-3 text-xl font-semibold tracking-tight">{pName || seller}</h2>
+
                     {worldV ? (
-                      <div className="mt-0.5 inline-flex items-center gap-1 text-xs text-accent">
-                        <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent" />
-                        World ID verified · {levelLabel(worldV.level)}
+                      <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-accent">
+                        <span className="inline-flex items-center gap-1">
+                          <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent" />
+                          World ID verified · {levelLabel(worldV.level)}
+                        </span>
+                        {/* The nullifier is the only durable handle on this
+                            verification, so make it copyable rather than decorative. */}
+                        {!worldV.tx && (
+                          <span className="text-amber-400">· on this device only</span>
+                        )}
                         {worldV.nullifierHash !== 'demo' && (
-                          <span className="font-mono text-muted"> · {shortNullifier(worldV.nullifierHash)}</span>
+                          <Copyable
+                            value={worldV.nullifierHash}
+                            copiedLabel="nullifier copied"
+                            className="font-mono text-muted transition-colors hover:text-foreground"
+                          >
+                            {shortNullifier(worldV.nullifierHash)}
+                          </Copyable>
                         )}
                       </div>
                     ) : (
-                      <div className="mt-0.5 text-xs text-muted">Not verified as a unique human</div>
+                      <div className="mt-1 text-xs text-muted">
+                        Not verified as a unique human. Buyers see this, and you cannot
+                        list a worker until you are.
+                      </div>
                     )}
-                  </div>
-                </div>
 
-                {!worldV && (
-                  <div className="mt-4 max-w-xs">
-                    <WorldVerify wallet={walletAddress} onVerified={setWorldV} label="Verify with World ID" />
-                  </div>
-                )}
+                    <p className={`mt-4 max-w-prose text-sm leading-relaxed ${pBio ? '' : 'text-muted'}`}>
+                      {pBio || 'No bio yet. Buyers use this to decide whether to trust you, so it is worth a line.'}
+                    </p>
 
-                <div className="mt-6 flex flex-col gap-4">
-                  <label className="text-sm">
-                    <span className="text-muted">Display name</span>
-                    <input value={pName} onChange={(e) => { setPName(e.target.value); setProfileSaved(false); }} placeholder="Maya Chen" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" />
-                  </label>
-                  <label className="text-sm">
-                    <span className="text-muted">Bio</span>
-                    <textarea value={pBio} onChange={(e) => { setPBio(e.target.value); setProfileSaved(false); }} rows={3} placeholder="What you build, and what buyers can trust you for." className="mt-1 w-full resize-none rounded-lg border border-hairline bg-background px-3 py-2 text-sm outline-none focus:border-accent" />
-                  </label>
-                  <div className="rounded-lg border border-hairline bg-background px-3 py-2.5 text-sm">
-                    <div className="text-[10px] uppercase tracking-wider text-muted">Payout wallet (Arc)</div>
-                    {walletAddress ? (
-                      <Copyable value={walletAddress} className="mt-0.5 break-all font-mono text-xs text-muted hover:text-foreground">{walletAddress}</Copyable>
-                    ) : (
-                      <div className="mt-0.5 font-mono text-xs text-muted">wallet not ready</div>
+                    {!worldV && (
+                      <div className="mt-4 max-w-xs">
+                        <WorldVerify wallet={walletAddress} onVerified={setWorldV} label="Verify with World ID" />
+                      </div>
                     )}
+
+                    {/* What a buyer is actually here to see. Balance and payout
+                        address deliberately excluded: one is private, the other is
+                        on-chain anyway and reads as clutter on a public profile. */}
+                    <div className="mt-6 border-t border-hairline pt-5">
+                      <div className="flex items-baseline justify-between">
+                        <h3 className="text-sm font-medium">Workers</h3>
+                        <span className="font-mono text-[11px] text-muted">
+                          {agentsLoading ? 'loading…' : `${activeCount} live${agents.length > activeCount ? ` · ${agents.length - activeCount} paused` : ''}`}
+                        </span>
+                      </div>
+
+                      {agentsLoading ? (
+                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                          {[0, 1].map((i) => <div key={i} className="h-28 animate-pulse rounded-xl bg-[#1c1c1c]" />)}
+                        </div>
+                      ) : agents.length === 0 ? (
+                        <div className="mt-3 rounded-xl border border-dashed border-hairline p-6 text-center">
+                          <p className="text-sm text-muted">No workers listed yet.</p>
+                          <button
+                            onClick={() => setTab('workers')}
+                            className="mt-3 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-black transition-opacity hover:opacity-90"
+                          >
+                            List your first worker
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                          {agents.map((a) => {
+                            const tags = a.tags ? a.tags.split(',').map((t) => t.trim()).filter(Boolean) : [];
+                            return (
+                              <button
+                                key={a.id}
+                                onClick={() => setTab('workers')}
+                                className="overflow-hidden rounded-xl border border-hairline bg-background text-left transition-colors hover:border-muted"
+                              >
+                                <div className="relative">
+                                  <Cover name={a.name} className="h-14 overflow-hidden" />
+                                  <div className="absolute right-2 top-2 rounded-full bg-black/55 px-2 py-0.5 backdrop-blur-sm">
+                                    <Pill kind={a.active ? 'active' : 'paused'} />
+                                  </div>
+                                </div>
+                                <div className="p-3">
+                                  <div className="flex items-baseline justify-between gap-2">
+                                    <span className="truncate text-sm font-medium">{a.name}</span>
+                                    <span className="shrink-0 font-mono text-xs">{a.price}<span className="text-muted"> USDC</span></span>
+                                  </div>
+                                  {a.description && (
+                                    <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted">{a.description}</p>
+                                  )}
+                                  {tags.length > 0 && (
+                                    <div className="mt-2 flex flex-wrap gap-1">
+                                      {tags.slice(0, 3).map((t) => (
+                                        <span key={t} className="rounded-full border border-hairline px-1.5 py-0.5 font-mono text-[9px] text-muted">{t}</span>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
+              )}
 
-                <div className="mt-5 flex items-center gap-3">
-                  <button disabled={!pName.trim()} onClick={saveProfile} className="rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40">Save changes</button>
-                  {profileSaved && <span className="text-sm text-accent">Saved ✓</span>}
+              {/* ---------- edit: the form, on request ---------- */}
+              {editingProfile && (
+                <div className="mt-6 rounded-xl border border-hairline bg-panel p-6">
+                  <div className="flex flex-col gap-4">
+                    <label className="text-sm">
+                      <span className="text-muted">Display name</span>
+                      <input
+                        autoFocus
+                        value={draftName}
+                        onChange={(e) => setDraftName(e.target.value)}
+                        placeholder="Maya Chen"
+                        className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent"
+                      />
+                    </label>
+                    <label className="text-sm">
+                      <span className="text-muted">Bio</span>
+                      <textarea
+                        value={draftBio}
+                        onChange={(e) => setDraftBio(e.target.value)}
+                        rows={3}
+                        maxLength={280}
+                        placeholder="What you build, and what buyers can trust you for."
+                        className="mt-1 w-full resize-none rounded-lg border border-hairline bg-background px-3 py-2 text-sm outline-none focus:border-accent"
+                      />
+                      <span className="mt-1 block text-right text-[10px] text-muted">{draftBio.length}/280</span>
+                    </label>
+                  </div>
+
+                  <div className="mt-5 flex items-center gap-3">
+                    <button
+                      disabled={!draftName.trim()}
+                      onClick={saveProfile}
+                      className="rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40"
+                    >
+                      Save changes
+                    </button>
+                    <button
+                      onClick={() => setEditingProfile(false)}
+                      className="rounded-lg border border-hairline px-4 py-2.5 text-sm text-muted transition-colors hover:text-foreground"
+                    >
+                      Cancel
+                    </button>
+                  </div>
                 </div>
-              </div>
+              )}
             </>
           )}
 
         </div>
       </main>
 
-      {/* List new agent modal */}
+      {/* List new worker modal */}
       {showNew && (
         <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 px-6 py-10 sm:items-center" onClick={() => setShowNew(false)}>
           <div className="relative flex max-h-[85vh] w-full max-w-md flex-col rounded-2xl border border-hairline bg-panel p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <button onClick={() => setShowNew(false)} aria-label="Close" className="absolute right-4 top-4 z-10 text-muted transition-colors hover:text-foreground">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="6" y1="6" x2="18" y2="18" /><line x1="18" y1="6" x2="6" y2="18" /></svg>
             </button>
-            <h2 className="shrink-0 text-lg font-semibold tracking-tight">List a new agent</h2>
-            <p className="mt-1 shrink-0 text-sm text-muted">This registers your agent on-chain for buyers to discover.</p>
+            <h2 className="shrink-0 text-lg font-semibold tracking-tight">List a new worker</h2>
+            <p className="mt-1 shrink-0 text-sm text-muted">This registers your worker on-chain for buyers to discover.</p>
             <div className="-mx-6 mt-5 flex flex-1 flex-col gap-3 overflow-y-auto px-6">
               <label className="text-sm"><span className="text-muted">Name</span>
-                <input autoFocus value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="e.g. Address Risk Agent" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" /></label>
+                <input autoFocus value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="e.g. Address Risk Worker" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" /></label>
               <label className="text-sm"><span className="text-muted">Description</span>
                 <input value={f.desc} onChange={(e) => setF({ ...f, desc: e.target.value })} placeholder="One line on what it does" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" /></label>
               <label className="text-sm"><span className="text-muted">Tags</span>
@@ -477,8 +588,43 @@ export default function SellerDashboard() {
                 <label className="text-sm"><span className="text-muted">Pay-to (optional)</span>
                   <input value={f.payTo} onChange={(e) => setF({ ...f, payTo: e.target.value })} placeholder="defaults to wallet" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" /></label>
               </div>
-              <label className="text-sm"><span className="text-muted">Endpoint URL (x402-gated)</span>
-                <input value={f.endpoint} onChange={(e) => { setF({ ...f, endpoint: e.target.value }); setProbe(null); setForceList(false); }} placeholder="https://…" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" /></label>
+              <div className="rounded-lg border border-hairline bg-background p-3">
+                <div className="text-[10px] uppercase tracking-wider text-muted">How buyers reach it</div>
+                <div className="mt-2 flex flex-col gap-2">
+                  {([
+                    ['hosted', 'Sovereign hosts it', 'Paste a webhook from a tool you already use. We add the payment wall, the https URL and the Circle account.'],
+                    ['own', 'I already have an x402 endpoint', 'You run the server and speak x402 yourself.'],
+                  ] as const).map(([mode, title, sub]) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => { setHosting(mode); setProbe(null); setForceList(false); }}
+                      className={`flex items-start gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors ${hosting === mode ? 'border-accent bg-accent/5' : 'border-hairline hover:border-muted'}`}
+                    >
+                      <span className={`mt-1 h-3 w-3 shrink-0 rounded-full border ${hosting === mode ? 'border-accent bg-accent' : 'border-hairline'}`} />
+                      <span className="text-[11px]">
+                        {title}
+                        <span className="block leading-relaxed text-muted">{sub}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="mt-3 border-t border-hairline pt-3">
+                  {hosting === 'hosted' ? (
+                    <HostedWorkerForm
+                      walletAddress={walletAddress}
+                      name={f.name}
+                      price={f.price}
+                      payTo={f.payTo.trim() || walletAddress || ''}
+                      onHosted={(url, slug) => { setF((prev) => ({ ...prev, endpoint: url })); setHostedSlug(slug); setProbe(null); setForceList(false); }}
+                    />
+                  ) : (
+                    <label className="text-sm"><span className="text-muted">Endpoint URL (x402-gated)</span>
+                      <input value={f.endpoint} onChange={(e) => { setF({ ...f, endpoint: e.target.value }); setProbe(null); setForceList(false); setHostedSlug(null); }} placeholder="https://…" className="mt-1 w-full rounded-lg border border-hairline bg-panel px-3 py-2 outline-none focus:border-accent" /></label>
+                  )}
+                </div>
+              </div>
 
               <EndpointProbe
                 endpoint={f.endpoint}
@@ -508,25 +654,28 @@ export default function SellerDashboard() {
                   !f.name.trim() || !f.price.trim() || !f.endpoint.trim() || !!txPending ||
                   (!probe && !forceList) || (!!probe && !probe.ok && !forceList)
                 }
-                onClick={createAgent}
+                onClick={createWorker}
                 className="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40"
               >
-                {txPending ? 'Confirm in wallet…' : probe?.ok ? 'List verified agent' : 'List agent'}
+                {txPending ? 'Confirm in wallet…' : probe?.ok ? 'List verified worker' : 'List worker'}
               </button>
-              <button onClick={() => { setShowNew(false); setProbe(null); setForceList(false); }} className="rounded-lg border border-hairline px-4 py-2.5 text-sm text-muted hover:text-foreground">Cancel</button>
+              <button onClick={() => { setShowNew(false); setProbe(null); setForceList(false); setHostedSlug(null); }} className="rounded-lg border border-hairline px-4 py-2.5 text-sm text-muted hover:text-foreground">Cancel</button>
             </div>
           </div>
         </div>
       )}
 
-      {showDeposit && (
-        <DepositModal address={walletAddress} onFunded={wallet.reload} onClose={() => setShowDeposit(false)} />
-      )}
-      {showWithdraw && (
-        <WithdrawModal address={walletAddress} balance={wallet.balance} onWithdraw={withdraw} onClose={() => setShowWithdraw(false)} />
+      {gate && (
+        <VerifyGate
+          wallet={walletAddress}
+          action="list a worker"
+          reason="A listing is a promise to strangers that something on the other end will do the work. Tying it to one verified human is what stops the same person filling the marketplace with a hundred of them."
+          onVerified={(v) => { setWorldV(v); setGate(false); setShowNew(true); }}
+          onClose={() => setGate(false)}
+        />
       )}
       {editing && (
-        <EditWorkerModal agent={editing} onSave={(input) => updateAgent(editing.id, input)} onClose={() => setEditId(null)} />
+        <EditWorkerModal agent={editing} onSave={(input) => updateWorker(editing.id, input)} onClose={() => setEditId(null)} />
       )}
     </div>
   );
@@ -613,47 +762,6 @@ function EditWorkerModal({ agent, onSave, onClose }: { agent: Agent; onSave: (in
           <button disabled={!name.trim() || !price.trim() || busy} onClick={save} className="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40">{busy ? 'Confirm in wallet…' : 'Save changes'}</button>
           <button onClick={onClose} className="rounded-lg border border-hairline px-4 py-2.5 text-sm text-muted hover:text-foreground">Cancel</button>
         </div>
-      </div>
-    </div>
-  );
-}
-
-function SellerOnboarding({ user, logout, onDone }: { user: any; logout: () => void; onDone: (name: string) => void }) {
-  const [name, setName] = useState('');
-  const [verified, setVerified] = useState(false);
-  // The payout wallet is the embedded wallet — same one the dashboard signs with.
-  const { address: walletAddress } = useEmbeddedWallet();
-  return (
-    <div className="flex min-h-screen items-center justify-center px-6">
-      <div className="w-full max-w-md rounded-2xl border border-hairline bg-panel p-7">
-        <Brand tag="for Sellers" />
-        <h1 className="mt-6 text-xl font-semibold tracking-tight">Set up your seller profile</h1>
-        <p className="mt-2 text-sm text-muted">Buyers pay your agents directly. First, prove you&apos;re a unique human.</p>
-        <label className="mt-6 block text-sm">
-          <span className="text-muted">Display name</span>
-          <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Maya Chen" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2.5 outline-none focus:border-accent" />
-        </label>
-        <div className="mt-3">
-          {verified ? (
-            <div className="w-full rounded-lg border border-accent px-4 py-2.5 text-center text-sm font-medium text-accent">
-              World ID verified ✓
-            </div>
-          ) : (
-            <WorldVerify wallet={walletAddress} onVerified={() => setVerified(true)} />
-          )}
-        </div>
-        <div className="mt-3 rounded-lg border border-hairline bg-background px-3 py-2.5 text-sm">
-          <div className="text-[11px] uppercase tracking-wider text-muted">Payout wallet</div>
-          {walletAddress ? (
-            <Copyable value={walletAddress} className="mt-0.5 break-all font-mono text-xs hover:text-foreground">{walletAddress}</Copyable>
-          ) : (
-            <div className="mt-0.5 font-mono text-xs text-muted">created on continue</div>
-          )}
-        </div>
-        <button disabled={!name.trim() || !verified} onClick={() => onDone(name.trim())} className="mt-6 w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40">
-          Continue
-        </button>
-        <button onClick={logout} className="mt-3 w-full text-center text-xs text-muted hover:text-foreground">Sign out</button>
       </div>
     </div>
   );
