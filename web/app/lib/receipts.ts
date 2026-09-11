@@ -272,3 +272,59 @@ export function removePending(settlementRef: string) {
     localStorage.setItem(KEY, JSON.stringify(readPending().filter((x) => x.settlementRef !== settlementRef)));
   } catch {}
 }
+
+export type WorkerEarning = {
+  id: string;
+  name: string;
+  /** USDC across graded calls. See the note below on why this is a floor. */
+  earned: number;
+  calls: number;
+  active: boolean;
+};
+
+/**
+ * What each of this wallet's workers has earned.
+ *
+ * Summed from receipts rather than from transfers into the payout address,
+ * because payTo defaults to the seller's own wallet and most sellers never
+ * change it: on-chain those transfers are indistinguishable between workers, so
+ * per-worker attribution is only possible from the receipts themselves.
+ *
+ * The consequence is that this is a FLOOR, not a total. A paid call that nobody
+ * graded leaves no receipt and is invisible here, which is why the chart says
+ * "graded calls" rather than "earnings" and why the two can disagree with the
+ * treasury balance.
+ */
+export async function fetchWorkerEarnings(owner: string): Promise<WorkerEarning[]> {
+  const fields = 'id name active totalPaid receiptCount';
+  const bare = 'id name active';
+  const run = async (sel: string) =>
+    query<{ agents: Record<string, unknown>[] }>(
+      `query($owner: Bytes!) { agents(where: { owner: $owner }, first: 100) { ${sel} } }`,
+      { owner: owner.toLowerCase() },
+    );
+
+  let rows: Record<string, unknown>[];
+  try {
+    rows = (await run(fields)).agents ?? [];
+  } catch {
+    // Before the Receipts datasource is deployed the aggregate fields do not
+    // exist and the whole query 400s. Fall back so the panel renders "nothing
+    // earned yet" instead of an error that looks like a broken page.
+    try {
+      rows = (await run(bare)).agents ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  return rows
+    .map((a) => ({
+      id: String(a.id ?? ''),
+      name: String(a.name ?? a.id ?? 'worker'),
+      earned: (Number(a.totalPaid ?? 0) || 0) / 1e6,
+      calls: Number(a.receiptCount ?? 0) || 0,
+      active: a.active !== false,
+    }))
+    .sort((x, y) => y.earned - x.earned);
+}

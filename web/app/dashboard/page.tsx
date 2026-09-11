@@ -11,6 +11,7 @@ import Copyable from '../components/Copyable';
 import Avatar from '../components/Avatar';
 import Cover from '../components/Cover';
 import VerifyGate from '../components/VerifyGate';
+import WorkerEarnings from '../components/WorkerEarnings';
 import OnboardingCard from '../components/Onboarding';
 import { useEmbeddedWallet } from '../lib/useEmbeddedWallet';
 import { readProfile } from '../lib/profile';
@@ -855,7 +856,18 @@ export default function Dashboard() {
                     <div className="h-full rounded-full bg-accent" style={{ width: `${Math.min(100, (policy.spentToday / policy.dailyBudget) * 100 || 0)}%` }} />
                   </div>
                   <div className="mt-1 text-[11px] text-muted">${policy.spentToday} of ${policy.dailyBudget} today</div>
-                  <div className="mt-4 flex gap-2">
+                  <details className="mt-4 rounded-lg border border-hairline bg-background px-3 py-2">
+                    <summary className="cursor-pointer text-[11px] text-muted hover:text-foreground">Connect Claude Code</summary>
+                    <Copyable value={mcpAddCommand()} className="mt-2 block break-all font-mono text-[10px] text-muted hover:text-foreground">
+                      {mcpAddCommand()}
+                    </Copyable>
+                    <div className="mt-1.5 text-[10px] leading-relaxed text-muted">
+                      Run it once in your project. Claude can then search the marketplace
+                      and hire workers under the limits above.
+                    </div>
+                  </details>
+
+                  <div className="mt-3 flex gap-2">
                     <button onClick={() => setEditPolicy(true)} className="flex-1 rounded-lg border border-hairline px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground">Edit limits</button>
                     <button onClick={() => setPolicy((p) => ({ ...p, paused: !p.paused }))} className="flex-1 rounded-lg border border-hairline px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground">
                       {policy.paused ? 'Resume spending' : 'Pause spending'}
@@ -863,21 +875,7 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                <div className="rounded-xl border border-hairline bg-panel p-5">
-                  <h2 className="text-sm font-medium">Connect Claude Code</h2>
-                  <p className="text-[12px] leading-relaxed text-muted">
-                    One command, run once in your project. Claude can then search the
-                    marketplace and hire workers under the limits above.
-                  </p>
-                  <div className="mt-2 rounded-lg border border-hairline bg-background px-3 py-2">
-                    <Copyable value={mcpAddCommand()} className="break-all font-mono text-[10px] text-muted mb-2 hover:text-foreground">
-                      {mcpAddCommand()}
-                    </Copyable>
-                  </div>
-                  <button onClick={() => setTab('marketplace')} className="mt-4 w-full rounded-lg border border-hairline px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground">
-                    Browse the marketplace
-                  </button>
-                </div>
+                <WorkerEarnings owner={walletAddress} />
               </div>
 
               <ActivityFeed items={feed} loading={walletLoading} error={walletError} />
