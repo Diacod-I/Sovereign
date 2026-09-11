@@ -1,0 +1,117 @@
+// app/lib/delegate.server.ts
+// Signing as the user's own embedded wallet, after they delegated it.
+//
+// Privy holds the key; the user grants our app permission to use it with
+// `delegateWallet` in the browser, and from then on our server can ask Privy to
+// send a transaction from that wallet. The user can revoke from their side, and
+// we can revoke from ours by deleting the link token.
+//
+// WHAT THIS COSTS, stated plainly because it is easy to lose in the plumbing:
+// between the grant and its revocation, this server can move that user's money.
+// That is a custodial-shaped power even though we never hold a key, and it is
+// why the spend policy had to stop being a localStorage object before this
+// existed. Two further limits are worth configuring rather than assuming:
+//
+//   - a Privy SIGNER POLICY on the authorization key, capping amount and
+//     expiring the grant, so Privy refuses what we should never have asked for
+//   - `SOVEREIGN_SERVER_MAX_PER_CALL`, a hard ceiling here that no account
+//     policy can raise, so a compromised policy store cannot authorise a
+//     transfer of any size
+
+const APP_ID = process.env.NEXT_PUBLIC_PRIVY_APP_ID || '';
+const APP_SECRET = process.env.PRIVY_APP_SECRET || '';
+const AUTH_KEY = process.env.PRIVY_AUTHORIZATION_KEY || '';
+
+/** A ceiling the account policy cannot raise. Defence against our own storage. */
+export const SERVER_MAX_PER_CALL = Number(process.env.SOVEREIGN_SERVER_MAX_PER_CALL || '5');
+
+export function delegationProblem(): string | null {
+  if (!APP_ID) return 'NEXT_PUBLIC_PRIVY_APP_ID is not set.';
+  if (!APP_SECRET) return 'PRIVY_APP_SECRET is not set, so the server cannot act for a delegated wallet.';
+  if (!AUTH_KEY) {
+    return 'PRIVY_AUTHORIZATION_KEY is not set. Generate one in the Privy dashboard and grant it access to delegated wallets.';
+  }
+  return null;
+}
+
+type PrivyClient = {
+  walletApi: {
+    ethereum: {
+      sendTransaction: (args: {
+        walletId?: string;
+        address?: string;
+        caip2: string;
+        transaction: Record<string, unknown>;
+      }) => Promise<{ hash: string }>;
+    };
+  };
+  getUserByWalletAddress?: (address: string) => Promise<unknown>;
+};
+
+let clientPromise: Promise<PrivyClient> | null = null;
+
+/**
+ * Imported lazily so a deployment without the server SDK still builds and every
+ * other route keeps working. The failure then lands here, named, instead of at
+ * module load in a route that has nothing to do with delegation.
+ */
+async function getClient(): Promise<PrivyClient> {
+  if (clientPromise) return clientPromise;
+  clientPromise = (async () => {
+    let mod: Record<string, unknown>;
+    try {
+      mod = (await import('@privy-io/server-auth')) as unknown as Record<string, unknown>;
+    } catch {
+      throw new Error('@privy-io/server-auth is not installed on the server.');
+    }
+    const Ctor = mod.PrivyClient as new (id: string, secret: string, opts?: unknown) => PrivyClient;
+    if (!Ctor) throw new Error('@privy-io/server-auth did not export PrivyClient.');
+    return new Ctor(APP_ID, APP_SECRET, {
+      walletApi: { authorizationPrivateKey: AUTH_KEY },
+    });
+  })().catch((e) => {
+    clientPromise = null; // let a later call retry rather than poisoning the process
+    throw e;
+  });
+  return clientPromise;
+}
+
+/**
+ * Sends a native-value transfer from the user's delegated wallet.
+ *
+ * `caip2` rather than a chain name because that is what the wallet API takes and
+ * because a typo in a chain name is the kind of thing that silently sends real
+ * money somewhere else.
+ */
+export async function sendAsUser(args: {
+  account: string;
+  to: string;
+  valueWei: bigint;
+  chainId: number;
+}): Promise<string> {
+  const problem = delegationProblem();
+  if (problem) throw new Error(problem);
+
+  // The ceiling is enforced on the 18-decimal native value, which is what
+  // actually leaves the wallet, rather than on the human number we were handed.
+  // BigInt(...) rather than a literal: tsconfig targets below ES2020 here, and
+  // 10n ** 12n will not compile.
+  const ceilingWei = BigInt(Math.round(SERVER_MAX_PER_CALL * 1e6)) * BigInt('1000000000000');
+  if (args.valueWei > ceilingWei) {
+    throw new Error(
+      `Refused: ${SERVER_MAX_PER_CALL} USDC is the hard per-call ceiling on this server, whatever the account policy says.`,
+    );
+  }
+
+  const privy = await getClient();
+  const { hash } = await privy.walletApi.ethereum.sendTransaction({
+    address: args.account,
+    caip2: `eip155:${args.chainId}`,
+    transaction: {
+      to: args.to,
+      value: `0x${args.valueWei.toString(16)}`,
+      chainId: args.chainId,
+    },
+  });
+  return hash;
+}

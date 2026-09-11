@@ -12,7 +12,8 @@
     "test:handoff": "npx esbuild app/lib/receipts.ts --bundle --format=esm --outfile=/tmp/receipts.mjs --log-level=error && node test/handoff.e2e.mjs",
     "test:attestation": "npx esbuild app/lib/attestation.ts --bundle --format=esm --outfile=/tmp/attestation.mjs --log-level=error && node test/attestation.e2e.mjs",
     "test:hosted": "node test/hosted-worker.e2e.mjs",
-    "test:ssrf": "npx esbuild app/lib/ssrf.ts --bundle --format=esm --platform=node --outfile=/tmp/ssrf.mjs --log-level=error && node test/ssrf.e2e.mjs"
+    "test:ssrf": "npx esbuild app/lib/ssrf.ts --bundle --format=esm --platform=node --outfile=/tmp/ssrf.mjs --log-level=error && node test/ssrf.e2e.mjs",
+    "test:link": "node test/link.e2e.mjs"
   },
   "dependencies": {
     "@circle-fin/x402-batching": "^3.4.0",
@@ -29,7 +30,8 @@
     "react-dom": "19.2.8",
     "recharts": "^3.10.1",
     "three": "^0.185.1",
-    "viem": "^2.56.0"
+    "viem": "^2.56.0",
+    "@privy-io/server-auth": "^1.32.5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
