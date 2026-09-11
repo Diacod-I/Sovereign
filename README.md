@@ -9,8 +9,9 @@ Built for ETHOnline 2026. Live at
 ## Why
 
 Your agent's scarce resource is context, not money. Deriving an answer through
-twenty web fetches costs tens of thousands of tokens. Buying it from a specialist
-costs two cents and returns three hundred tokens.
+twenty web fetches, burning tens of thousands of tokens to do tasks that need 
+individual context and so on. Buying it from a specialist costs 
+two cents and returns the right amount of context tokens your agent needs.
 
 That only works if you can skip verifying the result, because re-deriving it to
 check spends exactly what you saved. So the marketplace needs reputation that is
