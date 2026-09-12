@@ -292,9 +292,18 @@ export async function payAndCall(args: {
   try {
     payload = await scheme.createPaymentPayload(x402Version, option);
   } catch (e) {
-    // Signing failed, so nothing was authorised. Almost always either the
-    // delegation being absent or the Gateway balance being empty.
-    throw new NotPaidError(e instanceof Error ? e.message : 'Could not sign the payment.');
+    // Signing failed, so nothing was authorised.
+    //
+    // Attribution matters more than it looks here. This error travels to a
+    // model that is deciding what to tell a buyer, and an unlabelled Privy
+    // message like "Invalid app ID or app secret" reads as the WORKER being
+    // misconfigured -- which sends the buyer to find another seller for a fault
+    // that is entirely ours. Say whose problem it is.
+    const raw = e instanceof Error ? e.message : 'Could not sign the payment.';
+    throw new NotPaidError(
+      `Sovereign could not sign this payment (this is the marketplace's own configuration, ` +
+        `not the worker's): ${raw}`,
+    );
   }
 
   const header = Buffer.from(

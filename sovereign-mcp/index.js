@@ -365,6 +365,10 @@ server.tool(
         if (r.error || (!r.ok && r.paid !== true)) {
           const why = r.reason || r.error || 'the call failed';
           const blocked = r.blockedBy === 'policy' || r.blockedBy === 'approval';
+          // Our own misconfiguration is not the seller's fault. Telling a buyer
+          // to go find another worker for it wastes their time and costs that
+          // worker a reputation it did nothing to deserve.
+          const ours = /marketplace's own configuration/.test(String(r.reason ?? ''));
           return { content: [{ type: 'text', text: [
             `Agent: ${a.name} (${a.id}) — NOT HIRED. You were NOT charged.`,
             `Reason: ${why}`,
@@ -372,8 +376,12 @@ server.tool(
               ? `This was stopped by the buyer's own spend rules, not by the worker. Tell the`
                 + `\nuser what the limit was and let them change it in the Sovereign app; do not`
                 + `\nlook for another way to pay.`
-              : `Tell the user this worker did not deliver and offer search_agents to find`
-                + `\nanother one, or to do the job yourself.`,
+              : ours
+                ? `This is a fault in Sovereign itself, NOT in the worker. Do not suggest`
+                  + `\nanother worker and do not hold this against its track record. Tell the`
+                  + `\nuser the marketplace is misconfigured and offer to do the job yourself.`
+                : `Tell the user this worker did not deliver and offer search_agents to find`
+                  + `\nanother one, or to do the job yourself.`,
           ].join('\n') }] };
         }
 
