@@ -15,14 +15,15 @@ export const dynamic = 'force-dynamic';
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 
-/** Signed per operation, so a read signature cannot be replayed as a write. */
-export function policyMessage(op: string, account: string, issuedAt: string): string {
-  return [
-    `Sovereign: ${op} spend policy`,
-    `account: ${account.toLowerCase()}`,
-    `issued: ${issuedAt}`,
-  ].join('\n');
-}
+/**
+ * Signed per operation, so a read signature cannot be replayed as a write.
+ *
+ * Imported from a shared module rather than written twice: the browser has to
+ * produce this byte for byte, and a signature check that fails on a whitespace
+ * change is a bug nobody finds by reading either side alone.
+ */
+export { policySignMessage as policyMessage } from '../../lib/policyMessage';
+import { policySignMessage as policyMessage } from '../../lib/policyMessage';
 
 async function authorize(body: Record<string, unknown>, op: string) {
   const account = String(body.account ?? '');

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { usePrivy, useSendTransaction } from '@privy-io/react-auth';
+import { usePrivy, useSendTransaction, useSignMessage } from '@privy-io/react-auth';
 import { parseUnits } from 'viem';
 import { useRouter } from 'next/navigation';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
@@ -25,6 +25,7 @@ import {
   GATEWAY,
 } from '../lib/gateway';
 import { withoutHidden } from '../lib/curation';
+import { usePolicySync } from '../lib/usePolicySync';
 import { useDirectory } from '../lib/useDirectory';
 import { readVerification, mergeVerification, type SellerVerification } from '../lib/world';
 import { fetchVerification, useVerified } from '../lib/verification';
@@ -459,6 +460,7 @@ function McpDetails({ l, sellerName }: { l: Listing; sellerName: string }) {
 export default function Dashboard() {
   const { ready, authenticated, user, logout } = usePrivy();
   const { sendTransaction } = useSendTransaction();
+  const { signMessage } = useSignMessage();
   const router = useRouter();
 
   const [org, setOrg] = useState<string | null>(null);
@@ -508,6 +510,13 @@ export default function Dashboard() {
   const [fundStep, setFundStep] = useState<'approving' | 'depositing' | null>(null);
   /** Null until read. Decides whether topping up needs one prompt or two. */
   const [allowance, setAllowance] = useState<number | null>(null);
+
+  // Must sit with the other hooks, above the `if (!ready) return null` guard.
+  //
+  // These limits are enforced on the server, not here. Until they are pushed
+  // there, /api/agent/call reads nothing and refuses every payment while this
+  // page cheerfully displays a budget. Syncing is what makes the two agree.
+  const policySync = usePolicySync(walletAddress, signMessage);
 
   useEffect(() => {
     if (!walletAddress) return;
@@ -773,6 +782,7 @@ export default function Dashboard() {
   const reloadWallet = () => setWalletNonce((n) => n + 1);
 
 
+
   /**
    * Move USDC from the treasury into Gateway, so agents can spend it.
    *
@@ -966,6 +976,32 @@ export default function Dashboard() {
                       {policy.paused ? 'Resume spending' : 'Pause spending'}
                     </button>
                   </div>
+
+                  {/* The limits above live in this browser. Your agent asks the
+                      server, which is a different copy, and an unsynced account
+                      is why a paired terminal gets refused with no explanation
+                      that mentions syncing. */}
+                  <div className="mt-3 border-t border-hairline pt-3">
+                    <button
+                      onClick={() => void policySync.save(policy, allowlist)}
+                      disabled={policySync.state === 'saving' || !walletAddress}
+                      className="w-full rounded-lg border border-hairline px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40"
+                    >
+                      {policySync.state === 'saving'
+                        ? 'Check your wallet…'
+                        : policySync.state === 'saved'
+                          ? 'Synced to your agent ✓'
+                          : 'Sync limits to your agent'}
+                    </button>
+                    <p className="mt-2 text-[10px] leading-relaxed text-muted">
+                      Your agent reads these limits and your allowlist from the server, not from
+                      this browser. Sync after changing either, or a paired terminal will be
+                      refused. Signing costs nothing.
+                    </p>
+                    {policySync.error && (
+                      <p className="mt-2 text-[10px] leading-relaxed text-red-400">{policySync.error}</p>
+                    )}
+                  </div>
                 </div>
 
                 <WorkerEarnings owner={walletAddress} />
@@ -1033,6 +1069,7 @@ export default function Dashboard() {
                   >
                     <span className={`mr-1.5 inline-block h-1.5 w-1.5 rounded-full ${verifiedOnly ? 'bg-accent' : 'bg-muted'}`} />
                     Verified humans only
+                    <span className="ml-1.5 font-mono text-[11px] opacity-70">{verifiedCount}</span>
                   </button>
                 )}
               </div>

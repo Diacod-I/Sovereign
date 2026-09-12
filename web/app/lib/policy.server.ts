@@ -102,10 +102,15 @@ export function checkPolicy(
   priceUsdc: number,
   payTo: string,
 ): Verdict {
-  if (!saved) {
-    return { ok: false, reason: 'No spend policy is set for this account yet. Open Overview and set your limits.' };
-  }
-  const { policy, allowlist } = saved;
+  // A missing record means "never saved", not "no limits". Refusing outright
+  // was inconsistent with reserve(), which already falls back to DEFAULT_POLICY,
+  // and it made an invisible record the gate instead of a deliberate one.
+  //
+  // Defaulting grants nothing on its own: the allowlist below starts empty, so
+  // an account that has never configured anything still cannot pay anybody. The
+  // binding permission is the allowlist, which is an explicit act in the UI,
+  // rather than the presence of a row the account holder never knew about.
+  const { policy, allowlist } = saved ?? { policy: { ...DEFAULT_POLICY }, allowlist: [] };
   if (policy.paused) return { ok: false, reason: 'Spending is paused on this account.' };
   if (!Number.isFinite(priceUsdc) || priceUsdc <= 0) return { ok: false, reason: 'That is not a payable amount.' };
 
