@@ -14,7 +14,9 @@
     "test:hosted": "node test/hosted-worker.e2e.mjs",
     "test:ssrf": "npx esbuild app/lib/ssrf.ts --bundle --format=esm --platform=node --outfile=/tmp/ssrf.mjs --log-level=error && node test/ssrf.e2e.mjs",
     "test:link": "node test/link.e2e.mjs",
-    "test:x402": "npx esbuild app/lib/x402-pay.server.ts --bundle --format=esm --platform=node --outfile=./.x402pay.test.mjs --log-level=error --external:@circle-fin/* --external:@privy-io/* --external:viem && node test/x402-pay.e2e.mjs; rm -f ./.x402pay.test.mjs"
+    "test:x402": "npx esbuild app/lib/x402-pay.server.ts --bundle --format=esm --platform=node --outfile=./.x402pay.test.mjs --log-level=error --external:@circle-fin/* --external:@privy-io/* --external:viem && node test/x402-pay.e2e.mjs; rm -f ./.x402pay.test.mjs",
+    "preflight": "node test/preflight.mjs",
+    "test:world": "node test/world-verification.e2e.mjs"
   },
   "dependencies": {
     "@circle-fin/x402-batching": "^3.4.0",
