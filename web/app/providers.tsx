@@ -52,7 +52,20 @@ export function Providers({ children }: { children: React.ReactNode }) {
           ethereum: { createOnLogin: 'all-users' },
           showWalletUIs: true,
         },
-        loginMethods: ['wallet', 'email'],
+        // Email only.
+        //
+        // Every signing path in Sovereign uses the Privy EMBEDDED wallet, never
+        // the wallet someone logs in with, and an external login is therefore
+        // identity and nothing else. That worked -- getEmbeddedConnectedWallet
+        // resolves the right one either way -- but it meant the address a user
+        // sees, the address they fund, and the address the server signs with
+        // were three questions with two possible answers, and every mismatch
+        // surfaced late and cryptically.
+        //
+        // Email login creates exactly one wallet, which Privy holds the key
+        // for, so the answer is the same everywhere. Re-add 'wallet' here and
+        // in walletList to bring external logins back.
+        loginMethods: ['email'],
         appearance: {
           theme: '#0a0a0a',
           accentColor: '#2FFF00',
