@@ -12,7 +12,10 @@
       "name": "Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [0, 0]
+      "position": [
+        0,
+        0
+      ]
     },
     {
       "parameters": {
@@ -22,7 +25,10 @@
       "name": "Build queries",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [200, 0]
+      "position": [
+        200,
+        0
+      ]
     },
     {
       "parameters": {
@@ -31,38 +37,96 @@
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ queries: $json.queries }) }}",
-        "options": { "response": { "response": { "responseFormat": "text" } } }
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
       },
       "id": "osv",
       "name": "OSV querybatch",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [400, 0]
+      "position": [
+        400,
+        0
+      ]
     },
     {
       "parameters": {
-        "jsCode": "const raw = $input.first().json.data ?? $input.first().json;\nconst osv = typeof raw === 'string' ? JSON.parse(raw) : raw;\nconst pkgs = $('Build queries').first().json.pkgs;\n\nconst results = osv.results || [];\nconst findings = [];\npkgs.forEach((p, i) => {\n  const vulns = (results[i] && results[i].vulns) || [];\n  if (vulns.length) {\n    findings.push({\n      package: p.name,\n      version: p.version,\n      advisories: vulns.map((v) => ({ id: v.id, url: `https://osv.dev/vulnerability/${v.id}` })),\n    });\n  }\n});\n\n// `scanned` and `checkedAt` are part of the product, not decoration: what is\n// being bought is a dated statement about a specific set of versions.\nreturn [{ json: { output: {\n  scanned: pkgs.length,\n  vulnerable: findings.length,\n  findings,\n  source: 'osv.dev',\n  checkedAt: new Date().toISOString(),\n} } }];"
+        "jsCode": "const item = $input.first().json;\nconst raw = item.data ?? item;\n\nlet osv;\ntry {\n  osv = typeof raw === 'string' ? JSON.parse(raw) : raw;\n} catch (e) {\n  throw new Error('OSV did not return JSON: ' + String(raw).slice(0, 300));\n}\n\nconst pkgs = $('Build queries').first().json.pkgs;\n\n// A scanner that cannot tell \"found nothing\" from \"the lookup never ran\" is\n// worse than no scanner at all, because it sells a clean bill of health for a\n// question it failed to ask. OSV answers querybatch with exactly one result per\n// query, in order. Anything else -- an error body, a rate limit, a truncated\n// response -- means we do not know, and the only honest move is to fail loudly\n// rather than return zero findings that look identical to a real all-clear.\nconst results = osv.results;\nif (!Array.isArray(results) || results.length !== pkgs.length) {\n  throw new Error(\n    'OSV returned ' + (Array.isArray(results) ? results.length : 'no') +\n    ' result(s) for ' + pkgs.length + ' query/queries. Refusing to report a clean scan. ' +\n    'Response was: ' + JSON.stringify(osv).slice(0, 300)\n  );\n}\n\nconst findings = [];\npkgs.forEach((p, i) => {\n  const vulns = (results[i] && results[i].vulns) || [];\n  if (vulns.length) {\n    findings.push({\n      package: p.name,\n      version: p.version,\n      advisories: vulns.map((v) => ({ id: v.id, url: 'https://osv.dev/vulnerability/' + v.id })),\n    });\n  }\n});\n\n// `scanned` and `checkedAt` are part of the product, not decoration: what is\n// being bought is a dated statement about a specific set of versions.\nreturn [{ json: { output: {\n  scanned: pkgs.length,\n  vulnerable: findings.length,\n  findings,\n  source: 'osv.dev',\n  checkedAt: new Date().toISOString(),\n} } }];"
       },
       "id": "shape",
       "name": "Shape result",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [600, 0]
+      "position": [
+        600,
+        0
+      ]
     },
     {
-      "parameters": { "respondWith": "allIncomingItems", "options": {} },
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "options": {}
+      },
       "id": "respond",
       "name": "Respond",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [800, 0]
+      "position": [
+        800,
+        0
+      ]
     }
   ],
   "connections": {
-    "Webhook": { "main": [[{ "node": "Build queries", "type": "main", "index": 0 }]] },
-    "Build queries": { "main": [[{ "node": "OSV querybatch", "type": "main", "index": 0 }]] },
-    "OSV querybatch": { "main": [[{ "node": "Shape result", "type": "main", "index": 0 }]] },
-    "Shape result": { "main": [[{ "node": "Respond", "type": "main", "index": 0 }]] }
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Build queries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build queries": {
+      "main": [
+        [
+          {
+            "node": "OSV querybatch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OSV querybatch": {
+      "main": [
+        [
+          {
+            "node": "Shape result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape result": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
   "settings": {}
 }
