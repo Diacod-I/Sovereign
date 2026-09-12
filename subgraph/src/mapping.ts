@@ -131,7 +131,10 @@ export function handleVerified(e: Verified): void {
   v.account = e.params.account;
   v.nullifier = e.params.nullifier;
   v.level = e.params.level;
-  v.at = BigInt.fromU64(e.params.at);
+  // Already a BigInt: graph-ts decodes every uint, uint64 included, as BigInt
+  // rather than as an AssemblyScript primitive. BigInt.fromU64 wants a raw u64,
+  // so handing it this was a conversion in the wrong direction.
+  v.at = e.params.at;
   v.block = e.block.number;
   v.tx = e.transaction.hash;
   v.save();
