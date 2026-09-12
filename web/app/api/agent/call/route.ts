@@ -170,6 +170,11 @@ export async function POST(request: Request) {
         walletKnownToPrivy: wallet?.ok === true,
         walletIsEmbedded: wallet?.ok === true ? wallet.embedded : false,
         walletDelegated: wallet?.ok === true ? wallet.delegated : false,
+        // The address the signer will actually hand to Privy, which is Privy's
+        // own spelling and not necessarily the one in the link token. Reported
+        // because this pair silently diverging is what let every check above
+        // pass while signing failed with "no wallet account found".
+        walletSigningAddress: wallet?.ok === true ? wallet.stored : null,
         gatewayBalanceUsdc: funded,
         gatewayCoversThisCall: funded === null ? null : funded >= price,
       },

@@ -161,7 +161,7 @@ export async function credentialsWork(): Promise<{ ok: true } | { ok: false; det
 }
 
 export async function describeWallet(address: string): Promise<
-  { ok: true; embedded: boolean; delegated: boolean } | { ok: false; detail: string }
+  { ok: true; embedded: boolean; delegated: boolean; stored: string } | { ok: false; detail: string }
 > {
   const problem = delegationProblem();
   if (problem) return { ok: false, detail: problem };
@@ -191,6 +191,9 @@ export async function describeWallet(address: string): Promise<
       ok: true,
       embedded: client === 'privy' || client === 'privy-v2',
       delegated: hit?.delegated === true,
+      // Privy's own spelling of the address, carried back deliberately. See
+      // privyWalletAddress below for why the caller must not re-case it.
+      stored: String(hit?.address ?? address),
     };
   } catch (e) {
     return { ok: false, detail: e instanceof Error ? e.message : 'Privy lookup failed.' };
@@ -228,4 +231,25 @@ export async function sendAsUser(args: {
     },
   });
   return hash;
+}
+
+/**
+ * The exact address string Privy stores for `address`, or null if it has none.
+ *
+ * Privy's two lookups disagree about case, and that disagreement is a trap.
+ * `getUserByWalletAddress` matches any spelling, so a check built on it passes
+ * for a lowercased address. `walletApi.ethereum.signTypedData` matches the
+ * stored string literally and answers "no wallet account found for address"
+ * for the same input. A preflight built on the first will therefore report a
+ * wallet as ready while every signature with it fails, which is the worst
+ * shape a check can have: green, confident and wrong.
+ *
+ * Reading the spelling back and signing with that removes the guess. The
+ * alternative, checksumming the address ourselves, only works while our EIP-55
+ * and theirs agree, and silently returns to this same failure if they ever
+ * do not.
+ */
+export async function privyWalletAddress(address: string): Promise<string | null> {
+  const d = await describeWallet(address);
+  return d.ok ? d.stored : null;
 }

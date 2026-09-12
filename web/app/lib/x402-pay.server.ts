@@ -22,7 +22,7 @@
 // its own route. A wallet full of USDC with an empty Gateway balance cannot pay
 // this way, and the error for that is worth reading rather than guessing at.
 
-import { delegationProblem, SERVER_MAX_PER_CALL } from './delegate.server';
+import { delegationProblem, privyWalletAddress, SERVER_MAX_PER_CALL } from './delegate.server';
 import { gatewayAvailable } from './gateway';
 import { ARC_RPC_URL } from './arc';
 
@@ -125,8 +125,16 @@ export function delegatedSigner(account: string) {
     address: account as `0x${string}`,
     async signTypedData(params: TypedData): Promise<`0x${string}`> {
       const privy = await privyClient();
+      // Ask Privy how it spells this address before signing with it. The
+      // wallet API matches the stored string literally, so a lowercased
+      // address -- which is what a link token carries -- fails with "no wallet
+      // account found for address" even though the wallet plainly exists and
+      // every preflight check on it passed. Falling back to `account` keeps
+      // the original error when the wallet is genuinely absent, rather than
+      // replacing it with a confusing null.
+      const stored = (await privyWalletAddress(account)) ?? account;
       const { signature } = await privy.walletApi.ethereum.signTypedData({
-        address: account,
+        address: stored,
         typedData: withDomainType(params),
       });
       return signature as `0x${string}`;
