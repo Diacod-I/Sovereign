@@ -207,9 +207,15 @@ export default function LinkPage() {
               'which is the one Sovereign signs with.',
           );
         }
-        if (facts.delegated) {
-          // Already granted. Asking again has nothing to confirm, so the dialog
-          // never opens and the promise never settles. Skip straight past it.
+        // `delegated` is one boolean and cannot say WHICH signer is attached.
+        // On the session-signer path that distinction is the whole question:
+        // rotating the authorization key produces a new quorum, and a wallet
+        // still carrying the old one reads as delegated while the server holds
+        // a key that no longer matches it. Skipping is therefore only safe for
+        // legacy delegation, where there is exactly one thing to grant.
+        // addSigners is idempotent, so re-running it costs a dialog rather than
+        // correctness.
+        if (facts.delegated && !PRIVY_SIGNER_ID) {
           setBusy('signing');
         } else {
           setBusy('delegating');
@@ -401,11 +407,13 @@ export default function LinkPage() {
                 ? 'Privy does not list this wallet on your account, so it cannot be delegated.'
                 : !facts.embedded
                   ? 'This is an external wallet. Delegation applies only to the Privy embedded wallet.'
-                  : facts.delegated
-                    ? 'This wallet is already delegated, so approving will not ask again.'
-                    : PRIVY_SIGNER_ID
-                      ? 'Approving attaches Sovereign as a signer on this wallet, so it can pay inside your limits.'
-                      : 'No signer id is configured, so this will try the older delegation flow and may not work.'}
+                  : !PRIVY_SIGNER_ID
+                    ? (facts.delegated
+                        ? 'This wallet is already delegated, so approving will not ask again.'
+                        : 'No signer id is configured, so this will try the older delegation flow and may not work.')
+                    : facts.delegated
+                      ? 'This wallet already has a signer. Approving attaches the current one, which is what you want after rotating the authorization key.'
+                      : 'Approving attaches Sovereign as a signer on this wallet, so it can pay inside your limits.'}
             </div>
           )}
 
