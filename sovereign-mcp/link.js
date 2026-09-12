@@ -155,7 +155,12 @@ export function writeProjectFiles(result) {
   }
   mcp.mcpServers.sovereign = {
     command: 'npx',
-    args: ['-y', 'sovereign-mcp'],
+    // Pinned to @latest rather than the bare name. npx caches the first version
+    // it resolves and keeps using it, so a bare `sovereign-mcp` will happily
+    // start a months-old build forever -- and the symptom is not an error, it is
+    // a server missing the tool you are trying to use, which reads as the
+    // marketplace being broken. Costs a registry check at startup; worth it.
+    args: ['-y', 'sovereign-mcp@latest'],
     env: {
       SUBGRAPH_URL: SUBGRAPH,
       SOVEREIGN_SITE_URL: SITE,
