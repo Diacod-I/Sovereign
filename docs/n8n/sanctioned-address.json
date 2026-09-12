@@ -1,0 +1,64 @@
+{
+  "name": "Sovereign - Sanctioned Address Check",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sovereign-sanctions",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nconst addr = String((body.input || {}).address || '').trim();\nif (!/^0x[a-fA-F0-9]{40}$/.test(addr)) {\n  throw new Error('Send {\"input\":{\"address\":\"0x...\"}} with a 20-byte hex address');\n}\nreturn [{ json: { address: addr } }];"
+      },
+      "id": "read",
+      "name": "Read address",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [200, 0]
+    },
+    {
+      "parameters": {
+        "url": "https://raw.githubusercontent.com/0xB10C/ofac-sanctioned-digital-currency-addresses/lists/sanctioned_addresses_ETH.json",
+        "options": { "response": { "response": { "responseFormat": "text" } } }
+      },
+      "id": "list",
+      "name": "Fetch OFAC list",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [400, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Fetched as TEXT deliberately. n8n splits a JSON array response into one\n// item per element, which would turn a 120 entry list into 120 workflow items\n// and lose the address we are checking. Parsing it here keeps it one item.\nconst raw = $input.first().json.data ?? $input.first().json;\nconst arr = typeof raw === 'string' ? JSON.parse(raw) : raw;\nconst address = $('Read address').first().json.address;\nconst want = address.toLowerCase();\n\nconst hit = arr.some((a) => String(a).toLowerCase() === want);\n\n// listSize and checkedAt are the point. A no_match is only worth anything if\n// you can say what it was checked against and when.\nreturn [{ json: { output: {\n  address,\n  verdict: hit ? 'MATCH' : 'no_match',\n  sanctioned: hit,\n  listSize: arr.length,\n  source: 'OFAC SDN digital currency addresses (ETH)',\n  sourceUrl: 'https://sanctionslist.ofac.treas.gov',\n  checkedAt: new Date().toISOString(),\n} } }];"
+      },
+      "id": "shape",
+      "name": "Check membership",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [600, 0]
+    },
+    {
+      "parameters": { "respondWith": "allIncomingItems", "options": {} },
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [800, 0]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Read address", "type": "main", "index": 0 }]] },
+    "Read address": { "main": [[{ "node": "Fetch OFAC list", "type": "main", "index": 0 }]] },
+    "Fetch OFAC list": { "main": [[{ "node": "Check membership", "type": "main", "index": 0 }]] },
+    "Check membership": { "main": [[{ "node": "Respond", "type": "main", "index": 0 }]] }
+  },
+  "settings": {}
+}

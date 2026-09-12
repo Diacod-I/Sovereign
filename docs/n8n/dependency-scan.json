@@ -1,0 +1,68 @@
+{
+  "name": "Sovereign - Dependency Vulnerability Scan",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sovereign-depscan",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nconst input = body.input || {};\n\nlet pkgs = [];\nif (Array.isArray(input.packages)) {\n  pkgs = input.packages;\n} else if (input.dependencies && typeof input.dependencies === 'object') {\n  // A package.json dependencies block, pasted whole. Ranges are stripped to a\n  // concrete version: OSV matches versions, not ranges, and \"^4.17.20\" would\n  // silently match nothing and report a clean scan.\n  pkgs = Object.entries(input.dependencies).map(([name, range]) => ({\n    name,\n    version: String(range).replace(/^[\\^~>=<\\s]+/, ''),\n    ecosystem: input.ecosystem || 'npm',\n  }));\n}\n\npkgs = pkgs.filter((p) => p && p.name && p.version).slice(0, 100);\nif (!pkgs.length) {\n  throw new Error('Send {\"input\":{\"packages\":[{\"name\",\"version\",\"ecosystem\"}]}} or {\"input\":{\"dependencies\":{...}}}');\n}\n\nreturn [{ json: {\n  pkgs,\n  queries: pkgs.map((p) => ({\n    package: { name: p.name, ecosystem: p.ecosystem || 'npm' },\n    version: String(p.version),\n  })),\n} }];"
+      },
+      "id": "build",
+      "name": "Build queries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [200, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.osv.dev/v1/querybatch",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ queries: $json.queries }) }}",
+        "options": { "response": { "response": { "responseFormat": "text" } } }
+      },
+      "id": "osv",
+      "name": "OSV querybatch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [400, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.data ?? $input.first().json;\nconst osv = typeof raw === 'string' ? JSON.parse(raw) : raw;\nconst pkgs = $('Build queries').first().json.pkgs;\n\nconst results = osv.results || [];\nconst findings = [];\npkgs.forEach((p, i) => {\n  const vulns = (results[i] && results[i].vulns) || [];\n  if (vulns.length) {\n    findings.push({\n      package: p.name,\n      version: p.version,\n      advisories: vulns.map((v) => ({ id: v.id, url: `https://osv.dev/vulnerability/${v.id}` })),\n    });\n  }\n});\n\n// `scanned` and `checkedAt` are part of the product, not decoration: what is\n// being bought is a dated statement about a specific set of versions.\nreturn [{ json: { output: {\n  scanned: pkgs.length,\n  vulnerable: findings.length,\n  findings,\n  source: 'osv.dev',\n  checkedAt: new Date().toISOString(),\n} } }];"
+      },
+      "id": "shape",
+      "name": "Shape result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [600, 0]
+    },
+    {
+      "parameters": { "respondWith": "allIncomingItems", "options": {} },
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [800, 0]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Build queries", "type": "main", "index": 0 }]] },
+    "Build queries": { "main": [[{ "node": "OSV querybatch", "type": "main", "index": 0 }]] },
+    "OSV querybatch": { "main": [[{ "node": "Shape result", "type": "main", "index": 0 }]] },
+    "Shape result": { "main": [[{ "node": "Respond", "type": "main", "index": 0 }]] }
+  },
+  "settings": {}
+}
