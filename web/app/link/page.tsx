@@ -50,6 +50,23 @@ const DELEGATION_TIMEOUT_MS = 90000;
  */
 const PRIVY_SIGNER_ID = process.env.NEXT_PUBLIC_PRIVY_SIGNER_ID || '';
 
+/**
+ * True when Privy refused an `addSigners` call because the wallet already
+ * carries that signer.
+ *
+ * This is not a failure. The error describes the exact end state we were
+ * trying to reach, so surfacing it strands a correctly configured wallet on
+ * the approval page with a message that reads like something broke. Privy
+ * phrases it as a duplicate and does not surface a stable error code through
+ * the SDK here, so the message is what there is to match on. Anything that
+ * does not match still propagates, because a real delegation failure must not
+ * be swallowed into a signature the server will later reject.
+ */
+function isAlreadyAttached(e: unknown): boolean {
+  const m = e instanceof Error ? e.message : String(e ?? '');
+  return /duplicate signer|already been added|already a signer|already has/i.test(m);
+}
+
 /** Optional Privy signer policy, capping amount and expiry server-side. */
 const PRIVY_POLICY_ID = process.env.NEXT_PUBLIC_PRIVY_POLICY_ID || '';
 
@@ -213,8 +230,9 @@ export default function LinkPage() {
         // still carrying the old one reads as delegated while the server holds
         // a key that no longer matches it. Skipping is therefore only safe for
         // legacy delegation, where there is exactly one thing to grant.
-        // addSigners is idempotent, so re-running it costs a dialog rather than
-        // correctness.
+        // Re-running addSigners costs a dialog rather than correctness: if the
+        // signer is already the current one Privy rejects it as a duplicate,
+        // which isAlreadyAttached below reads as success.
         if (facts.delegated && !PRIVY_SIGNER_ID) {
           setBusy('signing');
         } else {
@@ -223,25 +241,29 @@ export default function LinkPage() {
         // actually hit was an indefinite one. Long enough for somebody to read
         // a consent dialog and decide; short enough that "stuck" eventually
         // becomes a sentence naming the setting to check.
-          await withTimeout(
-            PRIVY_SIGNER_ID
-              ? addSigners({
-                  address,
-                  signers: [
-                    PRIVY_POLICY_ID
-                      ? { signerId: PRIVY_SIGNER_ID, policyIds: [PRIVY_POLICY_ID] }
-                      : { signerId: PRIVY_SIGNER_ID },
-                  ],
-                }).then(() => undefined)
-              : delegateWallet({ address, chainType: 'ethereum' }),
-            DELEGATION_TIMEOUT_MS,
-            PRIVY_SIGNER_ID
-              ? 'Privy never confirmed the signer. Check that NEXT_PUBLIC_PRIVY_SIGNER_ID is the key ' +
-                'quorum id your authorization key belongs to.'
-              : 'Privy never confirmed the delegation, and no signer id is configured. Set ' +
-                'NEXT_PUBLIC_PRIVY_SIGNER_ID to your key quorum id: newer Privy apps do not support ' +
-                'the older delegated-actions flow this fell back to.',
-          );
+          try {
+            await withTimeout(
+              PRIVY_SIGNER_ID
+                ? addSigners({
+                    address,
+                    signers: [
+                      PRIVY_POLICY_ID
+                        ? { signerId: PRIVY_SIGNER_ID, policyIds: [PRIVY_POLICY_ID] }
+                        : { signerId: PRIVY_SIGNER_ID },
+                    ],
+                  }).then(() => undefined)
+                : delegateWallet({ address, chainType: 'ethereum' }),
+              DELEGATION_TIMEOUT_MS,
+              PRIVY_SIGNER_ID
+                ? 'Privy never confirmed the signer. Check that NEXT_PUBLIC_PRIVY_SIGNER_ID is the key ' +
+                  'quorum id your authorization key belongs to.'
+                : 'Privy never confirmed the delegation, and no signer id is configured. Set ' +
+                  'NEXT_PUBLIC_PRIVY_SIGNER_ID to your key quorum id: newer Privy apps do not support ' +
+                  'the older delegated-actions flow this fell back to.',
+            );
+          } catch (e) {
+            if (!isAlreadyAttached(e)) throw e;
+          }
         }
       }
 
@@ -412,7 +434,7 @@ export default function LinkPage() {
                         ? 'This wallet is already delegated, so approving will not ask again.'
                         : 'No signer id is configured, so this will try the older delegation flow and may not work.')
                     : facts.delegated
-                      ? 'This wallet already has a signer. Approving attaches the current one, which is what you want after rotating the authorization key.'
+                      ? 'This wallet already has a signer. Approving confirms it is the current one, and does nothing if it already is.'
                       : 'Approving attaches Sovereign as a signer on this wallet, so it can pay inside your limits.'}
             </div>
           )}
