@@ -42,6 +42,8 @@ if (health) {
     c.durableStorage ? '' : 'Workers vanish on a cold start. Set UPSTASH_REDIS_REST_URL and _TOKEN.');
   add(c.agentPayments, 'Agent payments (Privy delegation)',
     c.agentPayments ? '' : 'Claude Code cannot pay. Set PRIVY_APP_SECRET and PRIVY_AUTHORIZATION_KEY.');
+  add(c.privySignerId, 'Privy signer id (link --spend)',
+    c.privySignerId ? '' : 'Approving a spend link will hang. Set NEXT_PUBLIC_PRIVY_SIGNER_ID.');
   add(c.workerSecrets, 'Worker secret sealing',
     c.workerSecrets ? '' : 'Cannot store an upstream API key. Set WORKER_SECRET_KEY.');
   add(c.circleApiKey, 'Circle API key', c.circleApiKey ? '' : 'Gateway settlement may fail.');

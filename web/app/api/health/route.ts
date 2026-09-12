@@ -42,6 +42,10 @@ export async function GET() {
     onChainVerification: attestor === null,
     // Gateway settlement through Circle.
     circleApiKey: !!process.env.CIRCLE_API_KEY,
+    // The browser half of agent payments. Without it, approving a spend link
+    // falls back to Privy's legacy delegated-actions flow, which newer apps do
+    // not support and which fails by hanging rather than erroring.
+    privySignerId: !!process.env.NEXT_PUBLIC_PRIVY_SIGNER_ID,
     // Must be FALSE in production: it grants a verified badge with no check.
     worldDemoBypass: process.env.NEXT_PUBLIC_WORLD_DEMO === 'true',
     curatedOut: HIDDEN_LISTINGS.length,
@@ -54,6 +58,12 @@ export async function GET() {
     blocking.push('No durable store: hosted workers and spend policies will not survive a cold start.');
   }
   if (delegation) blocking.push(delegation);
+  if (!checks.privySignerId) {
+    blocking.push(
+      'NEXT_PUBLIC_PRIVY_SIGNER_ID is not set, so `link --spend` cannot attach this server as a ' +
+        'signer. Use the key quorum id your PRIVY_AUTHORIZATION_KEY belongs to.',
+    );
+  }
   if (checks.worldDemoBypass) {
     blocking.push('NEXT_PUBLIC_WORLD_DEMO is on: anyone can mark themselves a verified human.');
   }

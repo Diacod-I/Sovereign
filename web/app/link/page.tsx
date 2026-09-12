@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { usePrivy, useSignMessage, useDelegatedActions } from '@privy-io/react-auth';
+import { usePrivy, useSignMessage, useDelegatedActions, useSigners } from '@privy-io/react-auth';
 import Brand from '../components/Brand';
 import Copyable from '../components/Copyable';
 import { useEmbeddedWallet } from '../lib/useEmbeddedWallet';
@@ -34,6 +34,24 @@ const REQUEST_TIMEOUT_MS = 20000;
 
 /** Long enough to read a consent dialog and decide. */
 const DELEGATION_TIMEOUT_MS = 90000;
+
+/**
+ * The key quorum our server signs with, from the Privy dashboard.
+ *
+ * Privy has two generations of this. `delegateWallet` is the older "delegated
+ * actions" model, which grants the app blanket permission; `addSigners` is the
+ * current one, which attaches a NAMED signer -- our authorization key's quorum
+ * -- and optionally a policy that caps what it may do. Newer Privy apps are
+ * provisioned only for the second, which is why the first can sit forever with
+ * no dialog: there is no legacy delegation for it to ask about.
+ *
+ * Set this and we use the modern path. Leave it unset and we fall back, so an
+ * app configured the old way keeps working.
+ */
+const PRIVY_SIGNER_ID = process.env.NEXT_PUBLIC_PRIVY_SIGNER_ID || '';
+
+/** Optional Privy signer policy, capping amount and expiry server-side. */
+const PRIVY_POLICY_ID = process.env.NEXT_PUBLIC_PRIVY_POLICY_ID || '';
 
 /**
  * Reject a promise that will otherwise never settle.
@@ -116,6 +134,7 @@ export default function LinkPage() {
    * not exist does not reject, it simply never settles.
    */
   const { delegateWallet } = useDelegatedActions();
+  const { addSigners } = useSigners();
   const { address } = useEmbeddedWallet();
 
   const [code, setCode] = useState('');
@@ -199,11 +218,23 @@ export default function LinkPage() {
         // a consent dialog and decide; short enough that "stuck" eventually
         // becomes a sentence naming the setting to check.
           await withTimeout(
-            delegateWallet({ address, chainType: 'ethereum' }),
+            PRIVY_SIGNER_ID
+              ? addSigners({
+                  address,
+                  signers: [
+                    PRIVY_POLICY_ID
+                      ? { signerId: PRIVY_SIGNER_ID, policyIds: [PRIVY_POLICY_ID] }
+                      : { signerId: PRIVY_SIGNER_ID },
+                  ],
+                }).then(() => undefined)
+              : delegateWallet({ address, chainType: 'ethereum' }),
             DELEGATION_TIMEOUT_MS,
-            'Privy never confirmed the delegation. If no dialog appeared, delegated actions are ' +
-              'probably not enabled for this app in the Privy dashboard. You can still link for ' +
-              'discovery: run `npx sovereign-mcp@latest link` without --spend.',
+            PRIVY_SIGNER_ID
+              ? 'Privy never confirmed the signer. Check that NEXT_PUBLIC_PRIVY_SIGNER_ID is the key ' +
+                'quorum id your authorization key belongs to.'
+              : 'Privy never confirmed the delegation, and no signer id is configured. Set ' +
+                'NEXT_PUBLIC_PRIVY_SIGNER_ID to your key quorum id: newer Privy apps do not support ' +
+                'the older delegated-actions flow this fell back to.',
           );
         }
       }
@@ -220,7 +251,7 @@ export default function LinkPage() {
     } finally {
       setBusy(null);
     }
-  }, [address, status, signMessage, delegateWallet, needsName, name, facts]);
+  }, [address, status, signMessage, delegateWallet, addSigners, needsName, name, facts]);
 
   const deny = useCallback(async () => {
     if (!status) return;
@@ -372,7 +403,9 @@ export default function LinkPage() {
                   ? 'This is an external wallet. Delegation applies only to the Privy embedded wallet.'
                   : facts.delegated
                     ? 'This wallet is already delegated, so approving will not ask again.'
-                    : 'Approving opens a Privy dialog asking permission to sign payments with this wallet.'}
+                    : PRIVY_SIGNER_ID
+                      ? 'Approving attaches Sovereign as a signer on this wallet, so it can pay inside your limits.'
+                      : 'No signer id is configured, so this will try the older delegation flow and may not work.'}
             </div>
           )}
 
