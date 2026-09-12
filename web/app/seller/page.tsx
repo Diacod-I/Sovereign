@@ -165,6 +165,8 @@ export default function SellerDashboard() {
   };
 
   const activeCount = agents.filter((a) => a.active).length;
+  const liveWorkers = agents.filter((a) => a.active);
+  const retiredWorkers = agents.filter((a) => !a.active);
 
   /** The slug, if this listing points at a Sovereign-hosted endpoint. */
   const hostedSlugOf = (endpoint: string): string | null => {
@@ -179,6 +181,57 @@ export default function SellerDashboard() {
   if (!seller) {
     return <Onboarding logout={logout} onDone={(p) => { setSeller(p.name); setPName(p.name); setPBio(p.bio); }} />;
   }
+
+
+  /**
+   * One worker card, hoisted so the live and deactivated sections render the
+   * same thing instead of two copies that drift apart.
+   */
+  const workerCard = (a: RegistryAgent) => {
+            const tags = a.tags ? a.tags.split(',').map((t) => t.trim()).filter(Boolean) : [];
+            return (
+              <div key={a.id} className="overflow-hidden rounded-xl border border-hairline bg-panel">
+                <Cover name={a.name} />
+                <div className="p-5">
+                  <div className="flex items-center justify-between">
+                    <div className="font-medium">{a.name}</div>
+                    <Pill kind={a.active ? 'active' : 'paused'} />
+                  </div>
+                  {a.description && <div className="mt-1 truncate text-xs text-muted">{a.description}</div>}
+                  {tags.length > 0 && (
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      {tags.slice(0, 4).map((t) => (
+                        <span key={t} className="rounded-full border border-hairline bg-background px-2 py-0.5 font-mono text-[10px] text-muted">{t}</span>
+                      ))}
+                    </div>
+                  )}
+                  <div className="mt-4 flex items-center justify-between text-sm">
+                    <span className="text-muted">Price</span>
+                    <span className="font-mono">{a.price} USDC/call</span>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between">
+                    <span className="text-[10px] uppercase tracking-wider text-muted">Pays to</span>
+                    <Copyable value={a.payTo} className="font-mono text-xs text-muted hover:text-foreground">{short(a.payTo)}</Copyable>
+                  </div>
+                  <div className="mt-2 break-all font-mono text-[11px] text-muted">{a.endpoint}</div>
+                  <div className="mt-4 flex gap-2">
+                    <button disabled={!!txPending} onClick={() => setEditId(a.id)} className="flex-1 rounded-lg border border-hairline px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40">Edit</button>
+                    <button disabled={!!txPending} onClick={() => toggle(a.id)} className="flex-1 rounded-lg border border-hairline px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40">
+                      {a.active ? 'Deactivate' : 'Reactivate'}
+                    </button>
+                  </div>
+                  {SHOW_TEST_BENCH && hostedSlugOf(a.endpoint) && (
+                    <button
+                      onClick={() => setBenchFor(benchFor === a.id ? null : a.id)}
+                      className="mt-2 w-full rounded-lg border border-hairline px-3 py-1.5 text-[11px] text-muted transition-colors hover:text-foreground"
+                    >
+                      {benchFor === a.id ? 'Hide test bench' : 'Test bench'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+  };
 
   const fToInput = (): ListingInput => ({
     name: f.name.trim(),
@@ -344,53 +397,38 @@ export default function SellerDashboard() {
               ) : agents.length === 0 ? (
                 <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-muted">You have not listed any workers from this wallet yet.</div>
               ) : (
-                <div className="mt-6 grid gap-3 sm:grid-cols-2">
-                  {agents.map((a) => {
-                    const tags = a.tags ? a.tags.split(',').map((t) => t.trim()).filter(Boolean) : [];
-                    return (
-                      <div key={a.id} className="overflow-hidden rounded-xl border border-hairline bg-panel">
-                        <Cover name={a.name} />
-                        <div className="p-5">
-                          <div className="flex items-center justify-between">
-                            <div className="font-medium">{a.name}</div>
-                            <Pill kind={a.active ? 'active' : 'paused'} />
-                          </div>
-                          {a.description && <div className="mt-1 truncate text-xs text-muted">{a.description}</div>}
-                          {tags.length > 0 && (
-                            <div className="mt-3 flex flex-wrap gap-1.5">
-                              {tags.slice(0, 4).map((t) => (
-                                <span key={t} className="rounded-full border border-hairline bg-background px-2 py-0.5 font-mono text-[10px] text-muted">{t}</span>
-                              ))}
-                            </div>
-                          )}
-                          <div className="mt-4 flex items-center justify-between text-sm">
-                            <span className="text-muted">Price</span>
-                            <span className="font-mono">{a.price} USDC/call</span>
-                          </div>
-                          <div className="mt-2 flex items-center justify-between">
-                            <span className="text-[10px] uppercase tracking-wider text-muted">Pays to</span>
-                            <Copyable value={a.payTo} className="font-mono text-xs text-muted hover:text-foreground">{short(a.payTo)}</Copyable>
-                          </div>
-                          <div className="mt-2 break-all font-mono text-[11px] text-muted">{a.endpoint}</div>
-                          <div className="mt-4 flex gap-2">
-                            <button disabled={!!txPending} onClick={() => setEditId(a.id)} className="flex-1 rounded-lg border border-hairline px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40">Edit</button>
-                            <button disabled={!!txPending} onClick={() => toggle(a.id)} className="flex-1 rounded-lg border border-hairline px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40">
-                              {a.active ? 'Deactivate' : 'Reactivate'}
-                            </button>
-                          </div>
-                          {SHOW_TEST_BENCH && hostedSlugOf(a.endpoint) && (
-                            <button
-                              onClick={() => setBenchFor(benchFor === a.id ? null : a.id)}
-                              className="mt-2 w-full rounded-lg border border-hairline px-3 py-1.5 text-[11px] text-muted transition-colors hover:text-foreground"
-                            >
-                              {benchFor === a.id ? 'Hide test bench' : 'Test bench'}
-                            </button>
-                          )}
-                        </div>
+                <>
+                  {/* Split rather than sorted. A deactivated listing is still on
+                      chain and still yours, but it is not taking work, and mixing
+                      the two states in one grid leaves a small pill as the only
+                      thing telling you which is which. A rule says it once. */}
+                  {liveWorkers.length > 0 && (
+                    <div className="mt-6 grid gap-3 sm:grid-cols-2">{liveWorkers.map(workerCard)}</div>
+                  )}
+
+                  {liveWorkers.length === 0 && retiredWorkers.length > 0 && (
+                    <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-muted">
+                      Nothing of yours is taking work. Reactivate one below, or list something new.
+                    </div>
+                  )}
+
+                  {retiredWorkers.length > 0 && (
+                    <div className="mt-10">
+                      <div className="flex items-center gap-3">
+                        <h2 className="shrink-0 text-sm font-medium text-muted">Deactivated</h2>
+                        <span className="font-mono text-[11px] text-muted">{retiredWorkers.length}</span>
+                        <div className="h-px flex-1 bg-hairline" />
                       </div>
-                    );
-                  })}
-                </div>
+                      <p className="mt-2 max-w-prose text-[11px] leading-relaxed text-muted">
+                        Still registered on chain and still yours, but not taking work and not
+                        shown to buyers. Reactivating costs one transaction.
+                      </p>
+                      <div className="mt-4 grid gap-3 opacity-60 transition-opacity hover:opacity-100 sm:grid-cols-2">
+                        {retiredWorkers.map(workerCard)}
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
 
               {SHOW_TEST_BENCH && benchFor && (() => {
