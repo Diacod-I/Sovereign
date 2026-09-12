@@ -106,6 +106,61 @@ async function getClient(): Promise<PrivyClient> {
  * because a typo in a chain name is the kind of thing that silently sends real
  * money somewhere else.
  */
+/**
+ * What Privy actually knows about this address, before we ask it to sign.
+ *
+ * "No wallet account found for address 0x..." is what the signing call returns
+ * when the address is not an embedded wallet Privy holds for this app, and it
+ * arrives at the end of a payment attempt where every other gate has already
+ * passed. Three different causes produce that one sentence, and they are fixed
+ * in completely different places:
+ *
+ *   - the address is an external wallet (a MetaMask login), so there is no key
+ *     for Privy to sign with and never will be
+ *   - APP_ID and APP_SECRET belong to different Privy apps, so the lookup is
+ *     asking the wrong app about a wallet it has never seen
+ *   - the wallet exists but the authorization key's quorum has no access to it
+ *
+ * Asking first lets the caller say which, instead of relaying an error whose
+ * subject is ambiguous.
+ */
+export async function describeWallet(address: string): Promise<
+  { ok: true; embedded: boolean; delegated: boolean } | { ok: false; detail: string }
+> {
+  const problem = delegationProblem();
+  if (problem) return { ok: false, detail: problem };
+  try {
+    const privy = (await getClient()) as unknown as {
+      getUserByWalletAddress?: (a: string) => Promise<unknown>;
+    };
+    if (!privy.getUserByWalletAddress) {
+      return { ok: false, detail: 'This @privy-io/server-auth build cannot look up a wallet by address.' };
+    }
+    const user = (await privy.getUserByWalletAddress(address)) as
+      | { linkedAccounts?: Array<Record<string, unknown>> }
+      | null;
+    if (!user) {
+      return {
+        ok: false,
+        detail:
+          `Privy has no user for ${address}. Either it is an external wallet rather than a Privy ` +
+          `embedded one, or NEXT_PUBLIC_PRIVY_APP_ID and PRIVY_APP_SECRET belong to different apps.`,
+      };
+    }
+    const hit = (user.linkedAccounts ?? []).find(
+      (a) => a?.type === 'wallet' && String(a?.address ?? '').toLowerCase() === address.toLowerCase(),
+    );
+    const client = String(hit?.walletClientType ?? '');
+    return {
+      ok: true,
+      embedded: client === 'privy' || client === 'privy-v2',
+      delegated: hit?.delegated === true,
+    };
+  } catch (e) {
+    return { ok: false, detail: e instanceof Error ? e.message : 'Privy lookup failed.' };
+  }
+}
+
 export async function sendAsUser(args: {
   account: string;
   to: string;

@@ -18,6 +18,9 @@
 import { resolveToken, touchToken } from '../../../lib/link.server';
 import { checkPolicy, readPolicy, release, reserve } from '../../../lib/policy.server';
 import { NotPaidError, payAndCall } from '../../../lib/x402-pay.server';
+import { describeWallet, delegationProblem } from '../../../lib/delegate.server';
+import { gatewayAvailable } from '../../../lib/gateway';
+import { ARC_RPC_URL } from '../../../lib/arc';
 import { SUBGRAPH_URL } from '../../../lib/arc';
 import { assertFetchableUrl } from '../../../lib/ssrf';
 import { undelivered as undeliveredFrom } from '../../../lib/hosted';
@@ -89,7 +92,7 @@ export async function POST(request: Request) {
     );
   }
 
-  let body: { agentId?: string; input?: unknown };
+  let body: { agentId?: string; input?: unknown; dryRun?: boolean };
   try {
     body = (await request.json()) as typeof body;
   } catch {
@@ -142,6 +145,48 @@ export async function POST(request: Request) {
       },
       403,
     );
+  }
+
+  // Everything above this line is a gate that can refuse. A dry run stops here
+  // and reports the rest rather than discovering them one failed attempt at a
+  // time: the remaining checks are independent of each other, so answering them
+  // serially turns one misconfiguration into five round trips. Nothing below is
+  // reached, so nothing is reserved and nothing is signed.
+  if (body.dryRun) {
+    const delegation = delegationProblem();
+    const wallet = delegation ? null : await describeWallet(token.account);
+    const funded = await gatewayAvailable(ARC_RPC_URL, token.account);
+    return json({
+      ok: true,
+      dryRun: true,
+      account: token.account,
+      agent: { id: listing.id, name: listing.name, priceUsdc: price, payTo: listing.payTo },
+      checks: {
+        tokenScope: 'spend',
+        listingActive: true,
+        endpointFetchable: true,
+        policy: verdict.ok && !verdict.needsApproval,
+        delegationConfigured: delegation === null,
+        walletKnownToPrivy: wallet?.ok === true,
+        walletIsEmbedded: wallet?.ok === true ? wallet.embedded : false,
+        walletDelegated: wallet?.ok === true ? wallet.delegated : false,
+        gatewayBalanceUsdc: funded,
+        gatewayCoversThisCall: funded === null ? null : funded >= price,
+      },
+      blocking: [
+        delegation,
+        wallet && !wallet.ok ? wallet.detail : null,
+        wallet?.ok && !wallet.embedded
+          ? 'That address is an external wallet, not a Privy embedded one, so the server can never sign for it. Link from an account whose wallet Privy created.'
+          : null,
+        wallet?.ok && wallet.embedded && !wallet.delegated
+          ? 'The wallet has no signer attached. Re-run `npx sovereign-mcp@latest link --spend`.'
+          : null,
+        funded !== null && funded < price
+          ? `Agent spending balance is ${funded} USDC and this call costs ${price}. Top up on Overview.`
+          : null,
+      ].filter(Boolean),
+    });
   }
 
   // Booked before the call, because two calls racing would otherwise both pass a
