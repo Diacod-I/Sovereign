@@ -39,7 +39,7 @@ export default function VerifyGate({
       onClick={onClose}
     >
       <div
-        className="relative w-full max-w-md rounded-2xl border border-hairline bg-panel p-6 shadow-2xl"
+        className="relative flex max-h-[calc(100dvh-5rem)] w-full max-w-md flex-col overflow-y-auto rounded-2xl border border-hairline bg-panel p-6 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <button
