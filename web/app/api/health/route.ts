@@ -49,6 +49,17 @@ export async function GET() {
     // Must be FALSE in production: it grants a verified badge with no check.
     worldDemoBypass: process.env.NEXT_PUBLIC_WORLD_DEMO === 'true',
     curatedOut: HIDDEN_LISTINGS.length,
+    /**
+     * Not a secret: NEXT_PUBLIC_ ships to every browser already.
+     *
+     * Shown because the most confusing failure in this system is a Privy app
+     * mismatch. The app id, the app secret, the key quorum and the user's
+     * wallet must all belong to ONE app, and when they do not, the symptom is
+     * "no wallet account found for address 0x..." at the end of a payment that
+     * passed every other check. Eyeballing this against the dashboard settles
+     * in seconds what otherwise costs an evening.
+     */
+    privyAppId: process.env.NEXT_PUBLIC_PRIVY_APP_ID || null,
   };
 
   // The reasons are already user-facing strings from the modules that own them,
