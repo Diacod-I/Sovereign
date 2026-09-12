@@ -139,6 +139,13 @@ export default function WorldVerify({ wallet, onVerified, label, className, disa
 
   // Explicitly opted in, for local work without Portal credentials. Labelled so it
   // can never be mistaken for a real verification.
+  //
+  // Note what reaching here means: demo mode is a FALLBACK from a live config
+  // that did not validate, not a mode you can select. Seeing this on a deployed
+  // site therefore means two things at once -- the demo flag is set, and the
+  // real World credentials are incomplete -- and the second is the one worth
+  // fixing. So it is named here rather than left to be discovered by removing
+  // the flag and redeploying to see what breaks.
   if (status.mode === 'demo') {
     return (
       <div>
@@ -151,9 +158,17 @@ export default function WorldVerify({ wallet, onVerified, label, className, disa
           {text} <span className="text-muted">· demo</span>
         </button>
         <div className="mt-2 text-[11px] leading-relaxed text-amber-400">
-          Demo mode: this grants a badge without checking anything. Never enable
-          NEXT_PUBLIC_WORLD_DEMO on a deployed site.
+          Demo mode grants a badge without checking anything, so the verified
+          filter and one-human-one-account mean nothing while it is on. Never
+          leave NEXT_PUBLIC_WORLD_DEMO set on a deployed site.
         </div>
+        {status.missing.length > 0 && (
+          <div className="mt-2 text-[11px] leading-relaxed text-muted">
+            Real verification is off because this is unset or malformed:{' '}
+            <span className="font-mono text-foreground">{status.missing.join(', ')}</span>.
+            Fix that and the demo flag stops being used, whether or not it is set.
+          </div>
+        )}
       </div>
     );
   }

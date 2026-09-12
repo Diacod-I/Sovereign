@@ -31,7 +31,8 @@ export const worldDemoAllowed = process.env.NEXT_PUBLIC_WORLD_DEMO === 'true';
 
 export type WorldStatus =
   | { mode: 'live' }
-  | { mode: 'demo' }
+  /** Demo carries `missing` too: it is only ever reached because live failed. */
+  | { mode: 'demo'; missing: string[] }
   | { mode: 'unconfigured'; missing: string[] };
 
 /** Which mode we are in, and precisely what is missing if neither. */
@@ -43,7 +44,7 @@ export function worldStatus(): WorldStatus {
   if (!/^app_/.test(WORLD_APP_ID)) missing.push('NEXT_PUBLIC_WORLD_APP_ID (app_…)');
   if (!/^rp_/.test(WORLD_RP_ID)) missing.push('NEXT_PUBLIC_WORLD_RP_ID (rp_…)');
 
-  if (worldDemoAllowed) return { mode: 'demo' };
+  if (worldDemoAllowed) return { mode: 'demo', missing };
   return { mode: 'unconfigured', missing };
 }
 
@@ -86,9 +87,43 @@ function readStore(): Store {
   }
 }
 
+/**
+ * Whether a stored verification still counts.
+ *
+ * A demo badge is granted without checking anything, so it is only meaningful
+ * while this deployment is actually in demo mode. It used to outlive that: the
+ * badge lives in localStorage, localStorage survives deploys, and nothing
+ * revalidated it -- so a browser that got a demo badge once kept showing
+ * "World ID verified" long after the demo flag was gone, on a deployment that
+ * could no longer have issued it.
+ *
+ * That is the worst shape a bypass can leave behind, because the residue looks
+ * exactly like the real thing and there is nothing in the UI to tell them
+ * apart. So the check is made every read, against the CURRENT config, rather
+ * than trusted from when it was written.
+ */
+export const honoursVerification = (v: { level: string } | null | undefined): boolean =>
+  !!v && (v.level !== 'demo' || worldDemoAllowed);
+
 export function readVerification(wallet?: string | null): SellerVerification | null {
   if (!wallet) return null;
-  return readStore()[wallet.toLowerCase()] ?? null;
+  const found = readStore()[wallet.toLowerCase()] ?? null;
+  if (found && !honoursVerification(found)) {
+    // Cleared, not just ignored. Leaving it would mean re-deciding this on every
+    // read forever, and a demo badge on a live deployment is not something to
+    // keep a copy of.
+    forgetVerification(found.wallet);
+    return null;
+  }
+  return found;
+}
+
+export function forgetVerification(wallet: string) {
+  try {
+    const store = readStore();
+    delete store[wallet.toLowerCase()];
+    localStorage.setItem(KEY, JSON.stringify(store));
+  } catch {}
 }
 
 export function writeVerification(verification: SellerVerification) {
@@ -111,6 +146,10 @@ export function mergeVerification(
   onChain: { nullifier: string; level: string; at: number } | null,
   wallet?: string | null,
 ): SellerVerification | null {
+  // Applies to the chain's answer too. A demo-level record that somehow reached
+  // Arc is still a badge nobody checked, and reading it off a contract does not
+  // make it mean more than it did in localStorage.
+  if (onChain && !honoursVerification(onChain)) return null;
   if (onChain) {
     return {
       wallet: (wallet || local?.wallet || '').toLowerCase(),
@@ -124,5 +163,5 @@ export function mergeVerification(
   // No chain record. Trust an optimistic local flag from a publish this browser
   // just made, since the subgraph lags the chain by a few seconds and the badge
   // should not blink back to "unpublished" in between.
-  return local ? { ...local, onChain: local.onChain ?? false } : null;
+  return local && honoursVerification(local) ? { ...local, onChain: local.onChain ?? false } : null;
 }
