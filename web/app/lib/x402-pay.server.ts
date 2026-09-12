@@ -103,6 +103,37 @@ const DOMAIN_FIELDS: Array<[string, string]> = [
   ['salt', 'bytes32'],
 ];
 
+/**
+ * The same structure with every BigInt rendered as a decimal string.
+ *
+ * Privy's wallet API is an HTTP call, so the payload goes through
+ * JSON.stringify, and JSON.stringify throws on a BigInt rather than coercing
+ * it -- "Do not know how to serialize a BigInt". An x402 authorisation is
+ * full of them: chainId, value, validAfter, validBefore, nonce. They arrive
+ * as BigInt because that is the only correct way to hold a uint256 in JS, and
+ * they have to leave as strings because that is the only way to put a uint256
+ * in JSON.
+ *
+ * This does not change what gets signed. EIP-712 hashes a uint256 by value, so
+ * "1000" and 1000n encode to identical bytes, and the verifier recovers the
+ * same signer either way.
+ *
+ * Exported for tests: this is the step that decides whether a correctly built
+ * authorisation can leave the process at all.
+ */
+export function jsonSafe<T>(value: T): T {
+  if (typeof value === 'bigint') return value.toString() as unknown as T;
+  if (Array.isArray(value)) return value.map(jsonSafe) as unknown as T;
+  // Only plain objects. A Date or a typed array would be mangled by rebuilding
+  // it from its own entries, and neither belongs in typed data anyway.
+  if (value !== null && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = jsonSafe(v);
+    return out as unknown as T;
+  }
+  return value;
+}
+
 function withDomainType(td: TypedData): TypedData {
   if (td.types.EIP712Domain) return td;
   const present = DOMAIN_FIELDS.filter(([k]) => td.domain[k] !== undefined).map(([name, type]) => ({
@@ -135,7 +166,7 @@ export function delegatedSigner(account: string) {
       const stored = (await privyWalletAddress(account)) ?? account;
       const { signature } = await privy.walletApi.ethereum.signTypedData({
         address: stored,
-        typedData: withDomainType(params),
+        typedData: jsonSafe(withDomainType(params)),
       });
       return signature as `0x${string}`;
     },

@@ -14,7 +14,7 @@
 import http from 'node:http';
 import assert from 'node:assert';
 import { privateKeyToAccount } from 'viem/accounts';
-import { payAndCall, NotPaidError } from '../.x402pay.test.mjs';
+import { payAndCall, NotPaidError, jsonSafe } from '../.x402pay.test.mjs';
 
 const KEY = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d';
 const account = privateKeyToAccount(KEY);
@@ -241,6 +241,40 @@ await t('the real GatewayClient accepts the same fake worker (protocol check)', 
     assert.equal(r.transaction, '0xdeadbeef');
     assert.equal(seen.paid, 1);
   } finally { await close(server); }
+});
+
+// Privy's wallet API is HTTP, so the authorisation has to survive
+// JSON.stringify. It did not: every uint256 in an x402 payload is a BigInt,
+// and JSON.stringify throws on those rather than coercing them. The signature
+// was correct and simply could not be sent.
+await t('a BigInt-bearing authorisation survives JSON.stringify', async () => {
+  const td = {
+    domain: { name: 'GatewayWallet', version: '1', chainId: 5042002n, verifyingContract: GATEWAY_WALLET },
+    types: { BurnIntent: [{ name: 'maxBlockHeight', type: 'uint256' }, { name: 'spec', type: 'TransferSpec' }] },
+    primaryType: 'BurnIntent',
+    message: {
+      maxBlockHeight: 99999999999999n,
+      spec: { value: 100000n, nonce: 0n, recipient: USDC },
+      hints: [1n, 2n],
+    },
+  };
+  assert.throws(() => JSON.stringify(td), /BigInt/);
+
+  const safe = jsonSafe(td);
+  const round = JSON.parse(JSON.stringify(safe));
+  assert.equal(round.domain.chainId, '5042002');
+  assert.equal(round.message.maxBlockHeight, '99999999999999');
+  assert.equal(round.message.spec.value, '100000');
+  assert.equal(round.message.spec.nonce, '0');
+  assert.deepEqual(round.message.hints, ['1', '2']);
+
+  // Nothing that was not a BigInt may be touched: the struct still has to hash
+  // to the same thing the verifier expects.
+  assert.equal(round.primaryType, 'BurnIntent');
+  assert.equal(round.domain.verifyingContract, GATEWAY_WALLET);
+  assert.deepEqual(round.types, td.types);
+  // And the input must not be mutated in place.
+  assert.equal(typeof td.message.spec.value, 'bigint');
 });
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
