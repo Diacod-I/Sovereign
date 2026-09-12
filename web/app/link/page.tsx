@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { usePrivy, useSignMessage, useDelegatedActions } from '@privy-io/react-auth';
 import Brand from '../components/Brand';
 import Copyable from '../components/Copyable';
@@ -48,6 +48,37 @@ function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> 
     p,
     new Promise<T>((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
   ]);
+}
+
+/** What Privy already knows about this wallet, before we ask it to do anything. */
+type WalletFacts = { found: boolean; embedded: boolean; delegated: boolean };
+
+/**
+ * Read the delegation state off the user rather than inferring it from a call.
+ *
+ * Two failures look identical from the outside and are fixed differently.
+ * Delegating a wallet that is ALREADY delegated has nothing to consent to, so
+ * no dialog appears and the promise can sit forever. And delegation only
+ * applies to Privy's own embedded wallets, so asking it of an external wallet
+ * is a category error rather than a permission the user can grant. Both present
+ * as "stuck on granting permission", and neither is worth discovering by
+ * waiting ninety seconds.
+ */
+function walletFacts(
+  linkedAccounts: ReadonlyArray<Record<string, unknown>> | undefined,
+  address: string,
+): WalletFacts {
+  const want = address.toLowerCase();
+  const hit = (linkedAccounts ?? []).find(
+    (a) => a?.type === 'wallet' && String(a?.address ?? '').toLowerCase() === want,
+  );
+  if (!hit) return { found: false, embedded: false, delegated: false };
+  const client = String(hit.walletClientType ?? '');
+  return {
+    found: true,
+    embedded: client === 'privy' || client === 'privy-v2',
+    delegated: hit.delegated === true,
+  };
 }
 
 const post = async (body: unknown) => {
@@ -119,6 +150,16 @@ export default function LinkPage() {
     if (authenticated && !readProfile()) setNeedsName(true);
   }, [authenticated]);
 
+  // Memoised so `approve` can depend on it without being rebuilt every render,
+  // and so the notice below and the guard inside the callback can never
+  // disagree about what Privy says.
+  const facts = useMemo(
+    () => (address
+      ? walletFacts(user?.linkedAccounts as unknown as ReadonlyArray<Record<string, unknown>> | undefined, address)
+      : null),
+    [user?.linkedAccounts, address],
+  );
+
   const approve = useCallback(async () => {
     if (!address || !status) return;
     setErr(null);
@@ -137,18 +178,34 @@ export default function LinkPage() {
       // was never delegated is a credential that looks like it can pay and
       // cannot, which surfaces later as an unexplained failure mid-task.
       if (status.scope === 'spend') {
-        setBusy('delegating');
+        if (!facts) throw new Error('No wallet resolved yet.');
+        if (!facts.found) {
+          throw new Error('Privy does not list this wallet on your account, so it cannot be delegated.');
+        }
+        if (!facts.embedded) {
+          throw new Error(
+            'That is an external wallet. Delegation only applies to the Privy embedded wallet, ' +
+              'which is the one Sovereign signs with.',
+          );
+        }
+        if (facts.delegated) {
+          // Already granted. Asking again has nothing to confirm, so the dialog
+          // never opens and the promise never settles. Skip straight past it.
+          setBusy('signing');
+        } else {
+          setBusy('delegating');
         // Bounded, because this waits on a third party's UI and the failure we
         // actually hit was an indefinite one. Long enough for somebody to read
         // a consent dialog and decide; short enough that "stuck" eventually
         // becomes a sentence naming the setting to check.
-        await withTimeout(
-          delegateWallet({ address, chainType: 'ethereum' }),
-          DELEGATION_TIMEOUT_MS,
-          'Privy never confirmed the delegation. If no prompt appeared, delegated actions are ' +
-            'probably not enabled for this app in the Privy dashboard. You can still link without ' +
-            'spending: run `npx sovereign-mcp@latest link` and pay from the browser instead.',
-        );
+          await withTimeout(
+            delegateWallet({ address, chainType: 'ethereum' }),
+            DELEGATION_TIMEOUT_MS,
+            'Privy never confirmed the delegation. If no dialog appeared, delegated actions are ' +
+              'probably not enabled for this app in the Privy dashboard. You can still link for ' +
+              'discovery: run `npx sovereign-mcp@latest link` without --spend.',
+          );
+        }
       }
 
       const issuedAt = new Date().toISOString();
@@ -163,7 +220,7 @@ export default function LinkPage() {
     } finally {
       setBusy(null);
     }
-  }, [address, status, signMessage, delegateWallet, needsName, name]);
+  }, [address, status, signMessage, delegateWallet, needsName, name, facts]);
 
   const deny = useCallback(async () => {
     if (!status) return;
@@ -306,6 +363,18 @@ export default function LinkPage() {
               <div className="mt-1 text-[10px] text-muted">{user.email.address}</div>
             )}
           </div>
+
+          {spends && facts && (
+            <div className="mt-3 rounded-lg border border-hairline bg-background px-3 py-2 text-[11px] leading-relaxed text-muted">
+              {!facts.found
+                ? 'Privy does not list this wallet on your account, so it cannot be delegated.'
+                : !facts.embedded
+                  ? 'This is an external wallet. Delegation applies only to the Privy embedded wallet.'
+                  : facts.delegated
+                    ? 'This wallet is already delegated, so approving will not ask again.'
+                    : 'Approving opens a Privy dialog asking permission to sign payments with this wallet.'}
+            </div>
+          )}
 
           {needsName && (
             <label className="mt-3 block text-sm">
