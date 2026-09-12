@@ -42,11 +42,29 @@ if (health) {
     c.durableStorage ? '' : 'Workers vanish on a cold start. Set UPSTASH_REDIS_REST_URL and _TOKEN.');
   add(c.agentPayments, 'Agent payments (Privy delegation)',
     c.agentPayments ? '' : 'Claude Code cannot pay. Set PRIVY_APP_SECRET and PRIVY_AUTHORIZATION_KEY.');
+  // `undefined` means this deployment predates the field; `null`/'' means it is
+  // genuinely unset. Collapsing the two reports a stale deployment as a missing
+  // variable, which is a false alarm that costs more than the check saves.
+  add(
+    c.privyAppId === undefined ? null : !!c.privyAppId,
+    'Privy app id',
+    c.privyAppId === undefined
+      ? 'not reported — deployment predates this check, redeploy to see it'
+      : c.privyAppId
+        ? `${c.privyAppId} — the quorum and the users must be in THIS app`
+        : 'not set',
+  );
   add(c.privySignerId, 'Privy signer id (link --spend)',
     c.privySignerId ? '' : 'Approving a spend link will hang. Set NEXT_PUBLIC_PRIVY_SIGNER_ID.');
-  add(c.workerSecrets, 'Worker secret sealing',
-    c.workerSecrets ? '' : 'Cannot store an upstream API key. Set WORKER_SECRET_KEY.');
-  add(c.circleApiKey, 'Circle API key', c.circleApiKey ? '' : 'Gateway settlement may fail.');
+  // Only needed to SEAL a seller's upstream API key. Workers whose upstream
+  // needs no auth (OSV, the OFAC list) never touch it, so this is a warning
+  // rather than a failure.
+  add(c.workerSecrets ? true : null, 'Worker secret sealing',
+    c.workerSecrets ? '' : 'Only needed for workers whose upstream requires an API key.');
+  // This one IS blocking: without it the x402 middleware cannot get Gateway to
+  // quote payment terms, so a hosted worker never returns a payable 402.
+  add(c.circleApiKey, 'Circle API key',
+    c.circleApiKey ? '' : 'Hosted workers cannot quote payment terms without it.');
   add(c.onChainVerification ? true : null, 'On-chain World ID',
     c.onChainVerification ? '' : 'Badges stay local to the browser. Optional for a payment demo.');
   // This one is inverted: true is bad.
