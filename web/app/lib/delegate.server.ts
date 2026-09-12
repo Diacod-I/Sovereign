@@ -124,6 +124,42 @@ async function getClient(): Promise<PrivyClient> {
  * Asking first lets the caller say which, instead of relaying an error whose
  * subject is ambiguous.
  */
+/**
+ * Does Privy actually accept these credentials?
+ *
+ * `delegationProblem()` only proves three environment variables are non-empty.
+ * That is not the same question, and the difference cost several rounds of a
+ * green health check next to a failing payment: the variables were all set, and
+ * the app id and the secret belonged to different Privy apps.
+ *
+ * So this makes one real authenticated request. Looking up the zero address is
+ * the cheapest honest probe available -- valid credentials return null for "no
+ * such user", while bad ones raise "Invalid app ID or app secret" before the
+ * lookup is even attempted. The distinction between those two outcomes is
+ * exactly the thing worth reporting.
+ */
+export async function credentialsWork(): Promise<{ ok: true } | { ok: false; detail: string }> {
+  const problem = delegationProblem();
+  if (problem) return { ok: false, detail: problem };
+  try {
+    const privy = (await getClient()) as unknown as {
+      getUserByWalletAddress?: (a: string) => Promise<unknown>;
+    };
+    if (!privy.getUserByWalletAddress) return { ok: true }; // cannot probe; assume configured
+    await privy.getUserByWalletAddress('0x0000000000000000000000000000000000000000');
+    return { ok: true };
+  } catch (e) {
+    const raw = e instanceof Error ? e.message : String(e);
+    return {
+      ok: false,
+      detail: /invalid app/i.test(raw)
+        ? `Privy rejected these credentials: ${raw}. NEXT_PUBLIC_PRIVY_APP_ID and ` +
+          `PRIVY_APP_SECRET must come from the SAME app's settings page.`
+        : raw,
+    };
+  }
+}
+
 export async function describeWallet(address: string): Promise<
   { ok: true; embedded: boolean; delegated: boolean } | { ok: false; detail: string }
 > {

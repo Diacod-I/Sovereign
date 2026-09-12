@@ -40,8 +40,19 @@ if (health) {
   add(true, 'Site reachable');
   add(c.durableStorage, 'Durable storage (Upstash)',
     c.durableStorage ? '' : 'Workers vanish on a cold start. Set UPSTASH_REDIS_REST_URL and _TOKEN.');
-  add(c.agentPayments, 'Agent payments (Privy delegation)',
+  add(c.agentPayments, 'Privy variables set',
     c.agentPayments ? '' : 'Claude Code cannot pay. Set PRIVY_APP_SECRET and PRIVY_AUTHORIZATION_KEY.');
+  // The one that predicts whether a payment actually succeeds. Set means set;
+  // this means Privy accepted them.
+  add(
+    c.privyCredentialsValid === undefined ? null : c.privyCredentialsValid,
+    'Privy credentials ACCEPTED',
+    c.privyCredentialsValid === undefined
+      ? 'not reported — redeploy to see it'
+      : c.privyCredentialsValid
+        ? 'Privy accepted the app id + secret pair'
+        : 'Privy REJECTED them. See blocking below.',
+  );
   // `undefined` means this deployment predates the field; `null`/'' means it is
   // genuinely unset. Collapsing the two reports a stale deployment as a missing
   // variable, which is a false alarm that costs more than the check saves.

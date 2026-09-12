@@ -16,7 +16,7 @@
 
 import { kvConfigured, storageUsable } from '../../lib/kv';
 import { secretsConfigured } from '../../lib/hosted.server';
-import { delegationProblem } from '../../lib/delegate.server';
+import { credentialsWork, delegationProblem } from '../../lib/delegate.server';
 import { attestorProblem } from '../../lib/attestation';
 import { HIDDEN_LISTINGS } from '../../lib/curation';
 
@@ -26,6 +26,9 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   const delegation = delegationProblem();
   const attestor = attestorProblem();
+  // Configured and working are different questions, and only the second one
+  // predicts whether a payment will go through.
+  const creds = delegation ? { ok: false as const, detail: delegation } : await credentialsWork();
 
   const checks = {
     // Hosted workers and spend policies both live here. Without it a worker
@@ -38,6 +41,8 @@ export async function GET() {
     // The server signing x402 payments as the buyer's delegated wallet. This is
     // the one that decides whether Claude Code can pay at all.
     agentPayments: delegation === null,
+    // The variables exist AND Privy accepts them.
+    privyCredentialsValid: creds.ok,
     // World ID records reaching Arc.
     onChainVerification: attestor === null,
     // Gateway settlement through Circle.
@@ -69,6 +74,7 @@ export async function GET() {
     blocking.push('No durable store: hosted workers and spend policies will not survive a cold start.');
   }
   if (delegation) blocking.push(delegation);
+  else if (!creds.ok) blocking.push(creds.detail);
   if (!checks.privySignerId) {
     blocking.push(
       'NEXT_PUBLIC_PRIVY_SIGNER_ID is not set, so `link --spend` cannot attach this server as a ' +
