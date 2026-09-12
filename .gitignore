@@ -20,3 +20,4 @@ subgraph/build/
 .codex/
 .claude/
 .agents/
+.mcp.json
