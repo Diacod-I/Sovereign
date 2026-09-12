@@ -356,63 +356,70 @@ server.tool(
       }
       const latencyMs = Date.now() - startedAt;
 
-      if (r.error || (!r.ok && r.paid !== true)) {
-        const why = r.reason || r.error || 'the call failed';
-        const blocked = r.blockedBy === 'policy' || r.blockedBy === 'approval';
-        return { content: [{ type: 'text', text: [
-          `Agent: ${a.name} (${a.id}) — NOT HIRED. You were NOT charged.`,
-          `Reason: ${why}`,
-          blocked
-            ? `This was stopped by the buyer's own spend rules, not by the worker. Tell the`
-              + `\nuser what the limit was and let them change it in the Sovereign app; do not`
-              + `\nlook for another way to pay.`
-            : `Tell the user this worker did not deliver and offer search_agents to find`
-              + `\nanother one, or to do the job yourself.`,
-        ].join('\n') }] };
-      }
+      // An identity-scope token on a machine that holds its own agent key:
+      // the ACCOUNT will not pay, but this process can. Falling through is
+      // strictly better than refusing, and the distinction only exists
+      // because the server says which of the two it meant.
+      const accountWillNotPay = r.blockedBy === 'scope' && hasAutonomousKeys();
+      if (!accountWillNotPay) {
+        if (r.error || (!r.ok && r.paid !== true)) {
+          const why = r.reason || r.error || 'the call failed';
+          const blocked = r.blockedBy === 'policy' || r.blockedBy === 'approval';
+          return { content: [{ type: 'text', text: [
+            `Agent: ${a.name} (${a.id}) — NOT HIRED. You were NOT charged.`,
+            `Reason: ${why}`,
+            blocked
+              ? `This was stopped by the buyer's own spend rules, not by the worker. Tell the`
+                + `\nuser what the limit was and let them change it in the Sovereign app; do not`
+                + `\nlook for another way to pay.`
+              : `Tell the user this worker did not deliver and offer search_agents to find`
+                + `\nanother one, or to do the job yourself.`,
+          ].join('\n') }] };
+        }
 
-      // Paid and nothing came back. The receipt is what stops the next buyer
-      // paying this worker for the same nothing.
-      if (r.paid === true && r.delivered === false) {
+        // Paid and nothing came back. The receipt is what stops the next buyer
+        // paying this worker for the same nothing.
+        if (r.paid === true && r.delivered === false) {
+          const reviewUrl = handoffLink('review', {
+            agentId: a.id, agentName: a.name,
+            amountUsdc: r.settlement?.amountUsdc ?? usdc(a.pricePerCall),
+            expectation: want,
+            settlementRef: r.settlement?.transaction || '',
+            latencyMs, delivered: false,
+          });
+          return { content: [{ type: 'text', text: [
+            `Agent: ${a.name} (${a.id}) — PAID ${r.settlement?.amountUsdc ?? '?'} USDC BUT NOTHING WAS DELIVERED.`,
+            `Reason: ${r.reason || 'no output'}`,
+            ``,
+            `Do NOT retry and do NOT pay again.`,
+            `FILE THE RECEIPT — opens the review prefilled as not delivered:`,
+            reviewUrl,
+          ].join('\n') }] };
+        }
+
         const reviewUrl = handoffLink('review', {
           agentId: a.id, agentName: a.name,
-          amountUsdc: r.settlement?.amountUsdc ?? usdc(a.pricePerCall),
+          amountUsdc: r.settlement?.amountUsdc ?? '0',
           expectation: want,
           settlementRef: r.settlement?.transaction || '',
-          latencyMs, delivered: false,
+          latencyMs, delivered: true,
         });
+        const out = typeof r.output === 'string' ? r.output : JSON.stringify(r.output, null, 2);
         return { content: [{ type: 'text', text: [
-          `Agent: ${a.name} (${a.id}) — PAID ${r.settlement?.amountUsdc ?? '?'} USDC BUT NOTHING WAS DELIVERED.`,
-          `Reason: ${r.reason || 'no output'}`,
+          r.free
+            ? `Agent: ${a.name} (${a.id}) — answered WITHOUT charging. It is not x402-gated,`
+              + `\nso nothing was paid and this call leaves no receipt.`
+            : `Agent: ${a.name} (${a.id}) — PAID ${r.settlement.amountUsdc} USDC → ${r.settlement.payTo}`,
+          !r.free && r.settlement.transaction ? `Settlement: ${r.settlement.transaction}` : '',
+          `Took ${latencyMs}ms · track record: ${summarise(trackRecord(a))}`,
+          want ? `Expectation on record: "${want}"` : '',
           ``,
-          `Do NOT retry and do NOT pay again.`,
-          `FILE THE RECEIPT — opens the review prefilled as not delivered:`,
-          reviewUrl,
-        ].join('\n') }] };
+          `WORKER OUTPUT:\n${out}`,
+          ``,
+          r.free ? '' : `RATE THIS CALL — opens the review prefilled:\n${reviewUrl}`,
+          r.free ? '' : `Their rating is what the next buyer sees, so it is part of the job.`,
+        ].filter(Boolean).join('\n') }] };
       }
-
-      const reviewUrl = handoffLink('review', {
-        agentId: a.id, agentName: a.name,
-        amountUsdc: r.settlement?.amountUsdc ?? '0',
-        expectation: want,
-        settlementRef: r.settlement?.transaction || '',
-        latencyMs, delivered: true,
-      });
-      const out = typeof r.output === 'string' ? r.output : JSON.stringify(r.output, null, 2);
-      return { content: [{ type: 'text', text: [
-        r.free
-          ? `Agent: ${a.name} (${a.id}) — answered WITHOUT charging. It is not x402-gated,`
-            + `\nso nothing was paid and this call leaves no receipt.`
-          : `Agent: ${a.name} (${a.id}) — PAID ${r.settlement.amountUsdc} USDC → ${r.settlement.payTo}`,
-        !r.free && r.settlement.transaction ? `Settlement: ${r.settlement.transaction}` : '',
-        `Took ${latencyMs}ms · track record: ${summarise(trackRecord(a))}`,
-        want ? `Expectation on record: "${want}"` : '',
-        ``,
-        `WORKER OUTPUT:\n${out}`,
-        ``,
-        r.free ? '' : `RATE THIS CALL — opens the review prefilled:\n${reviewUrl}`,
-        r.free ? '' : `Their rating is what the next buyer sees, so it is part of the job.`,
-      ].filter(Boolean).join('\n') }] };
     }
 
     // Autonomous settle+call when the operator provisioned an agent key. The

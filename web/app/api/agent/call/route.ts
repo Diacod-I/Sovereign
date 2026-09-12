@@ -80,6 +80,10 @@ export async function POST(request: Request) {
       {
         error:
           'This terminal is linked for discovery only. Re-run `npx sovereign-mcp@latest link --spend` to let it pay.',
+        // Machine-readable so a caller holding its own key can tell "this
+        // account will not pay" from "this call was refused", and fall back to
+        // paying for itself rather than giving up.
+        blockedBy: 'scope',
       },
       403,
     );
