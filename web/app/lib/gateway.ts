@@ -1,6 +1,16 @@
-'use client';
-
 // app/lib/gateway.ts
+//
+// Deliberately NOT 'use client'. Everything here is isomorphic -- viem calldata
+// encoding and a plain eth_call over fetch -- and the directive was costing
+// more than it bought: marking a module as client-only makes it a client
+// reference proxy when a server module imports it, so calling it from the
+// server throws at runtime rather than failing to build. The payment path did
+// exactly that, in production, on a call that had already passed every other
+// gate.
+//
+// A module does not need the directive to be USED by a client component. It
+// needs it only to force itself into the client bundle, which nothing here
+// requires.
 // Funding the balance that agent payments actually draw on.
 //
 // This exists because of a distinction that is invisible until it bites. There
