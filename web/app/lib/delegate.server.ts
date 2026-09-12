@@ -25,11 +25,34 @@ const AUTH_KEY = process.env.PRIVY_AUTHORIZATION_KEY || '';
 /** A ceiling the account policy cannot raise. Defence against our own storage. */
 export const SERVER_MAX_PER_CALL = Number(process.env.SOVEREIGN_SERVER_MAX_PER_CALL || '5');
 
+/**
+ * Why this server cannot sign for a delegated wallet, if it cannot.
+ *
+ * Every message names WHERE the variable belongs. These strings travel a long
+ * way -- from here, through the API response, through sovereign-mcp, into a
+ * model's explanation, to a person -- and "PRIVY_APP_SECRET is not set" read at
+ * the far end of that chain sounds like something missing on the machine the
+ * terminal is running on. It is not: it is a server secret in the deployment,
+ * and somebody spent a retry finding that out.
+ */
 export function delegationProblem(): string | null {
-  if (!APP_ID) return 'NEXT_PUBLIC_PRIVY_APP_ID is not set.';
-  if (!APP_SECRET) return 'PRIVY_APP_SECRET is not set, so the server cannot act for a delegated wallet.';
+  if (!APP_ID) {
+    return 'NEXT_PUBLIC_PRIVY_APP_ID is not set in the Sovereign deployment (server-side config, not on your machine).';
+  }
+  if (!APP_SECRET) {
+    return (
+      'PRIVY_APP_SECRET is not set in the Sovereign deployment, so the server cannot sign as your ' +
+      'wallet. This is a server environment variable on the Sovereign host, not anything on your ' +
+      'machine or in .mcp.json. Set it in the Vercel project settings and redeploy.'
+    );
+  }
   if (!AUTH_KEY) {
-    return 'PRIVY_AUTHORIZATION_KEY is not set. Generate one in the Privy dashboard and grant it access to delegated wallets.';
+    return (
+      'PRIVY_AUTHORIZATION_KEY is not set in the Sovereign deployment. It must be the private key ' +
+      'of the same key quorum whose id is in NEXT_PUBLIC_PRIVY_SIGNER_ID, or the signer attached ' +
+      'in the browser will not be the one the server signs with. Set it in the Vercel project ' +
+      'settings and redeploy.'
+    );
   }
   return null;
 }
