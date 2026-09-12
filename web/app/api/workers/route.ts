@@ -102,13 +102,25 @@ async function handleSave(body: SaveBody) {
   // forever and answers never — which is a buyer's problem, not the operator's,
   // and it is not something a line of returned JSON was ever going to prevent.
   if (!workersDurable) {
+    // The remedy differs by environment, and offering the wrong one costs
+    // somebody an afternoon. SOVEREIGN_ALLOW_EPHEMERAL_LINKS is a real escape
+    // hatch for one long-lived process, and `workersDurable` refuses it outright
+    // on serverless -- so naming it there would send the reader off to set a
+    // variable that this very check ignores.
+    const onServerless = process.env.VERCEL === '1';
     return json(
       {
-        error:
-          'This deployment has no durable store, so a hosted worker saved here would stop ' +
-          'existing on the next cold start while its on-chain listing lived on. Set ' +
-          'UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN, or SOVEREIGN_ALLOW_EPHEMERAL_LINKS=true ' +
-          'if this is a single long-lived process.',
+        error: onServerless
+          ? 'This deployment has no durable store, so a hosted worker saved here would stop ' +
+            'existing on the next cold start while its on-chain listing lived on forever. Set ' +
+            'UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN (the REST pair, not the ' +
+            'redis:// connection string), or provision Upstash from Vercel Storage, which ' +
+            'injects KV_REST_API_URL and KV_REST_API_TOKEN and is also accepted. Then redeploy. There is no alternative on serverless: ' +
+            'the in-process fallback is per-instance and does not survive a cold start.'
+          : 'This deployment has no durable store, so a hosted worker saved here would stop ' +
+            'existing on restart while its on-chain listing lived on. Set ' +
+            'UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN, or ' +
+            'SOVEREIGN_ALLOW_EPHEMERAL_LINKS=true if this really is one long-lived process.',
         storage: { durable: workersDurable },
       },
       503,

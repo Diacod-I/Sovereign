@@ -13,8 +13,20 @@
 // back to an in-process Map, so `npm run dev` needs no setup — but that fallback
 // is per-instance and forgetful, and says so loudly if anything writes to it.
 
-const URL_ = process.env.UPSTASH_REDIS_REST_URL || '';
-const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || '';
+// Two spellings, because there are two ways to provision the same database and
+// they disagree about names. Going to upstash.com gives you
+// UPSTASH_REDIS_REST_*; provisioning through Vercel's marketplace injects
+// KV_REST_API_* for the very same Upstash instance. Accepting both means the
+// one-click path works without anyone having to notice, rather than failing as
+// "no durable store" while the dashboard plainly shows a database attached.
+const URL_ =
+  process.env.UPSTASH_REDIS_REST_URL ||
+  process.env.KV_REST_API_URL ||
+  '';
+const TOKEN =
+  process.env.UPSTASH_REDIS_REST_TOKEN ||
+  process.env.KV_REST_API_TOKEN ||
+  '';
 
 export const kvConfigured = !!URL_ && !!TOKEN;
 
