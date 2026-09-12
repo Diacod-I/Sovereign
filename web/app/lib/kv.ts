@@ -66,13 +66,36 @@ function warnOnce() {
   );
 }
 
+/**
+ * How long to wait on the store before giving up.
+ *
+ * There was no timeout here, which meant an unreachable Upstash did not fail,
+ * it hung -- and every route that touches the store hung with it. A request
+ * that never returns is the worst failure to debug, because it produces no
+ * error anywhere and looks like the UI being stuck rather than storage being
+ * unreachable. Failing at eight seconds turns that into a sentence.
+ */
+const KV_TIMEOUT_MS = 8000;
+
 async function command(args: (string | number)[]): Promise<unknown> {
-  const res = await fetch(URL_, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
-    body: JSON.stringify(args),
-    cache: 'no-store',
-  });
+  let res: Response;
+  try {
+    res = await fetch(URL_, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+      body: JSON.stringify(args),
+      cache: 'no-store',
+      signal: AbortSignal.timeout(KV_TIMEOUT_MS),
+    });
+  } catch (e) {
+    const why = e instanceof Error && e.name === 'TimeoutError'
+      ? `no response in ${KV_TIMEOUT_MS / 1000}s`
+      : e instanceof Error ? e.message : 'unreachable';
+    throw new Error(
+      `kv ${args[0]} failed: ${why}. Check UPSTASH_REDIS_REST_URL is the https REST URL ` +
+      `(not the redis:// connection string) and that the token matches it.`,
+    );
+  }
   if (!res.ok) throw new Error(`kv ${args[0]} failed: HTTP ${res.status}`);
   const json = (await res.json()) as { result?: unknown; error?: string };
   if (json.error) throw new Error(`kv ${args[0]} failed: ${json.error}`);

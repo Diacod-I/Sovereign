@@ -29,12 +29,25 @@ type Status = {
   state: 'pending' | 'approved' | 'denied' | 'expired';
 };
 
+/** Long enough for a cold serverless start, short enough to fail rather than hang. */
+const REQUEST_TIMEOUT_MS = 20000;
+
 const post = async (body: unknown) => {
-  const res = await fetch('/api/link', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch('/api/link', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (e) {
+    throw new Error(
+      e instanceof Error && e.name === 'TimeoutError'
+        ? 'Sovereign did not answer in 20 seconds. Its durable store may be unreachable.'
+        : 'Could not reach Sovereign.',
+    );
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data?.error) throw new Error(data?.error || `Request failed (HTTP ${res.status}).`);
   return data;
@@ -49,7 +62,17 @@ export default function LinkPage() {
   const [code, setCode] = useState('');
   const [status, setStatus] = useState<Status | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  /**
+   * Which step we are inside, not merely that we are inside one.
+   *
+   * Approving is three waits with unrelated failure modes: Privy's delegation
+   * consent, a wallet signature, and a request to our own server. One
+   * "Approving…" cannot distinguish "a prompt is open behind this window" from
+   * "our server is not answering", and those need opposite responses from the
+   * person staring at it. Delegation is named first because it runs first and
+   * is the one people do not expect.
+   */
+  const [busy, setBusy] = useState<null | 'delegating' | 'signing' | 'sending'>(null);
   const [done, setDone] = useState<'approved' | 'denied' | null>(null);
   const [name, setName] = useState('');
   const [needsName, setNeedsName] = useState(false);
@@ -71,13 +94,13 @@ export default function LinkPage() {
   const approve = useCallback(async () => {
     if (!address || !status) return;
     setErr(null);
-    setBusy(true);
+    setBusy('signing');
     try {
       // A brand-new account has no name yet, and the name is what buyers see on
       // anything this terminal later lists. Ask before granting, not after.
       if (needsName) {
         const trimmed = name.trim();
-        if (!trimmed) { setErr('Give your account a name first.'); setBusy(false); return; }
+        if (!trimmed) { setErr('Give your account a name first.'); setBusy(null); return; }
         writeProfile({ name: trimmed, bio: '' });
         setNeedsName(false);
       }
@@ -86,18 +109,21 @@ export default function LinkPage() {
       // was never delegated is a credential that looks like it can pay and
       // cannot, which surfaces later as an unexplained failure mid-task.
       if (status.scope === 'spend') {
+        setBusy('delegating');
         await delegateWallet({ address, chainType: 'ethereum' });
       }
 
       const issuedAt = new Date().toISOString();
       const message = linkApprovalMessage({ code: status.code, account: address, scope: status.scope, issuedAt });
+      setBusy('signing');
       const { signature } = await signMessage({ message }, { address });
+      setBusy('sending');
       await post({ op: 'approve', code: status.code, account: address, scope: status.scope, issuedAt, signature });
       setDone('approved');
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Could not approve.');
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }, [address, status, signMessage, delegateWallet, needsName, name]);
 
@@ -263,11 +289,17 @@ export default function LinkPage() {
 
           <div className="mt-5 flex gap-3">
             <button
-              disabled={!address || busy}
+              disabled={!address || !!busy}
               onClick={approve}
               className="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40"
             >
-              {busy ? 'Approving…' : spends ? 'Approve and allow spending' : 'Approve'}
+              {busy === 'delegating'
+                ? 'Granting permission…'
+                : busy === 'signing'
+                  ? 'Check your wallet…'
+                  : busy === 'sending'
+                    ? 'Linking…'
+                    : spends ? 'Approve and allow spending' : 'Approve'}
             </button>
             <button
               onClick={deny}
@@ -276,6 +308,16 @@ export default function LinkPage() {
               Reject
             </button>
           </div>
+
+          {busy && (
+            <p className="mt-3 text-[11px] leading-relaxed text-muted">
+              {busy === 'delegating'
+                ? 'Privy is asking permission for Sovereign to sign payments with this wallet. The prompt may have opened behind this window.'
+                : busy === 'signing'
+                  ? 'Your wallet is waiting for a signature. Nothing is spent by signing this.'
+                  : 'Sent. Waiting on Sovereign.'}
+            </p>
+          )}
 
           <p className="mt-3 text-[11px] leading-relaxed text-muted">
             If you did not just run that command, reject this.
