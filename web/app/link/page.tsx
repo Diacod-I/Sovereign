@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { usePrivy, useSignMessage, useHeadlessDelegatedActions } from '@privy-io/react-auth';
+import { usePrivy, useSignMessage, useDelegatedActions } from '@privy-io/react-auth';
 import Brand from '../components/Brand';
 import Copyable from '../components/Copyable';
 import { useEmbeddedWallet } from '../lib/useEmbeddedWallet';
@@ -32,6 +32,24 @@ type Status = {
 /** Long enough for a cold serverless start, short enough to fail rather than hang. */
 const REQUEST_TIMEOUT_MS = 20000;
 
+/** Long enough to read a consent dialog and decide. */
+const DELEGATION_TIMEOUT_MS = 90000;
+
+/**
+ * Reject a promise that will otherwise never settle.
+ *
+ * Needed because a wallet SDK call waiting on a prompt is not cancellable and
+ * does not time out on its own. The underlying work is not stopped, only
+ * stopped being waited on, which is the honest limit of what a caller can do
+ * about somebody else's pending dialog.
+ */
+function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+  ]);
+}
+
 const post = async (body: unknown) => {
   let res: Response;
   try {
@@ -56,7 +74,17 @@ const post = async (body: unknown) => {
 export default function LinkPage() {
   const { ready, authenticated, login, user } = usePrivy();
   const { signMessage } = useSignMessage();
-  const { delegateWallet } = useHeadlessDelegatedActions();
+  /**
+   * The UI variant, not the headless one.
+   *
+   * Both have the same signature, and the difference is the whole bug: the
+   * headless hook deliberately renders nothing, on the assumption that the app
+   * has collected consent itself. This app has not, and it runs with
+   * `showWalletUIs: true`, so the headless call sat waiting on a confirmation
+   * that nobody was ever going to draw. A promise awaiting a prompt that does
+   * not exist does not reject, it simply never settles.
+   */
+  const { delegateWallet } = useDelegatedActions();
   const { address } = useEmbeddedWallet();
 
   const [code, setCode] = useState('');
@@ -110,7 +138,17 @@ export default function LinkPage() {
       // cannot, which surfaces later as an unexplained failure mid-task.
       if (status.scope === 'spend') {
         setBusy('delegating');
-        await delegateWallet({ address, chainType: 'ethereum' });
+        // Bounded, because this waits on a third party's UI and the failure we
+        // actually hit was an indefinite one. Long enough for somebody to read
+        // a consent dialog and decide; short enough that "stuck" eventually
+        // becomes a sentence naming the setting to check.
+        await withTimeout(
+          delegateWallet({ address, chainType: 'ethereum' }),
+          DELEGATION_TIMEOUT_MS,
+          'Privy never confirmed the delegation. If no prompt appeared, delegated actions are ' +
+            'probably not enabled for this app in the Privy dashboard. You can still link without ' +
+            'spending: run `npx sovereign-mcp@latest link` and pay from the browser instead.',
+        );
       }
 
       const issuedAt = new Date().toISOString();
@@ -312,7 +350,7 @@ export default function LinkPage() {
           {busy && (
             <p className="mt-3 text-[11px] leading-relaxed text-muted">
               {busy === 'delegating'
-                ? 'Privy is asking permission for Sovereign to sign payments with this wallet. The prompt may have opened behind this window.'
+                ? 'Privy is asking permission for Sovereign to sign payments with this wallet. Its dialog may have opened behind this window.'
                 : busy === 'signing'
                   ? 'Your wallet is waiting for a signature. Nothing is spent by signing this.'
                   : 'Sent. Waiting on Sovereign.'}
