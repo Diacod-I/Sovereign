@@ -1033,7 +1033,6 @@ export default function Dashboard() {
                   >
                     <span className={`mr-1.5 inline-block h-1.5 w-1.5 rounded-full ${verifiedOnly ? 'bg-accent' : 'bg-muted'}`} />
                     Verified humans only
-                    <span className="ml-1.5 font-mono text-[11px] opacity-70">{verifiedCount}</span>
                   </button>
                 )}
               </div>
