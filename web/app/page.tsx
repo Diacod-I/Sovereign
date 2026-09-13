@@ -117,7 +117,7 @@ export default function Home() {
                 writes the skill. */}
             <div className="mt-6 flex flex-wrap items-center gap-3">
               <Copyable
-                value="npx sovereign-mcp@latest link"
+                value="npx sovereign-mcp@latest link --spend"
                 copiedLabel="copied, paste it in your project"
                 className="rounded-lg border border-hairline bg-panel px-3 py-2 font-mono text-xs text-muted transition-colors hover:text-foreground"
               >
