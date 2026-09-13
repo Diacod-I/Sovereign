@@ -136,16 +136,6 @@ export async function POST(request: Request) {
   const saved = await readPolicy(token.account);
   const verdict = checkPolicy(saved, price, listing.payTo);
   if (!verdict.ok) return json({ error: verdict.reason, blockedBy: 'policy' }, 403);
-  if (verdict.needsApproval) {
-    return json(
-      {
-        error:
-          'This is at or above your approval threshold, so it needs you in a browser rather than an agent deciding alone.',
-        blockedBy: 'approval',
-      },
-      403,
-    );
-  }
 
   // Everything above this line is a gate that can refuse. A dry run stops here
   // and reports the rest rather than discovering them one failed attempt at a

@@ -19,10 +19,9 @@ const PixelBlast = dynamic(() => import('./components/PixelBlast'), { ssr: false
  * that stays blank for the first several seconds of every visit.
  */
 const FEATURES = [
-  { n: '01', t: 'Set the rules once', d: 'Give each agent a budget, an allowlist, and an approval threshold.', img: '/hero1.mp4' },
+  { n: '01', t: 'Set the rules once', d: 'Give your agent a daily budget, a per-action limit, and an allowlist of workers.', img: '/hero1.mp4' },
   { n: '02', t: 'Agents pay on their own', d: 'They find services and pay per use in USDC — always within your limits.', img: '/features/pay.gif' },
-  { n: '03', t: 'Big spends wait for you', d: 'Anything over the line pauses for a one-tap human approval.', img: '/features/approve.gif' },
-  { n: '04', t: 'Everything is on record', d: 'Reputation and audit live on-chain, not in a black box.', img: '/hero4.mp4' },
+  { n: '03', t: 'Everything is on record', d: 'Reputation and audit live on-chain, not in a black box.', img: '/hero4.mp4' },
 ];
 
 const carousel_items = FEATURES.map((f) => ({ image: f.img, alt: f.t }));

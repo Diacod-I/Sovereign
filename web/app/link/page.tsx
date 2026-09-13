@@ -384,8 +384,8 @@ export default function LinkPage() {
                 Pay workers from this wallet, without asking you each time.
               </li>
               <li>
-                Only within your spend limits, only to workers on your allowlist, and
-                never above your approval threshold, which still needs you in a browser.
+                Only to workers on your allowlist, only within your per-action limit,
+                and only until your daily budget runs out.
               </li>
             </>
           ) : (
