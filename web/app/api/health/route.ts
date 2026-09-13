@@ -45,6 +45,12 @@ export async function GET() {
     privyCredentialsValid: creds.ok,
     // World ID records reaching Arc.
     onChainVerification: attestor === null,
+    // Whether a buyer can grade a call at all. The whole marketplace rests on
+    // reputation, and without this address the review dialog opens, prefills
+    // correctly, and leaves its submit button disabled -- so the failure lands
+    // after the money has moved, on a buyer who now has no way to say the work
+    // was bad. Nothing else in the stack notices, which is why it is here.
+    onChainReceipts: /^0x[a-fA-F0-9]{40}$/.test(process.env.NEXT_PUBLIC_RECEIPTS_ADDRESS || ''),
     // Gateway settlement through Circle.
     circleApiKey: !!process.env.CIRCLE_API_KEY,
     // The browser half of agent payments. Without it, approving a spend link
@@ -79,6 +85,13 @@ export async function GET() {
     blocking.push(
       'NEXT_PUBLIC_PRIVY_SIGNER_ID is not set, so `link --spend` cannot attach this server as a ' +
         'signer. Use the key quorum id your PRIVY_AUTHORIZATION_KEY belongs to.',
+    );
+  }
+  if (!checks.onChainReceipts) {
+    blocking.push(
+      'NEXT_PUBLIC_RECEIPTS_ADDRESS is not a contract address, so no buyer can grade a call. ' +
+        'The review dialog opens and fills in correctly, then refuses to submit -- after the money ' +
+        'has already moved.',
     );
   }
   if (checks.worldDemoBypass) {

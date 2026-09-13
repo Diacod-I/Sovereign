@@ -78,6 +78,14 @@ if (health) {
     c.circleApiKey ? '' : 'Hosted workers cannot quote payment terms without it.');
   add(c.onChainVerification ? true : null, 'On-chain World ID',
     c.onChainVerification ? '' : 'Badges stay local to the browser. Optional for a payment demo.');
+  // Blocking, and easy to miss, because nothing fails until a buyer has already
+  // paid and wants to say the work was bad.
+  add(c.onChainReceipts === undefined ? null : c.onChainReceipts, 'Grading (Receipts contract)',
+    c.onChainReceipts === undefined
+      ? 'This deployment predates the check. Redeploy to see it.'
+      : c.onChainReceipts
+        ? ''
+        : 'NEXT_PUBLIC_RECEIPTS_ADDRESS is unset or malformed. Every review will refuse to submit.');
   // This one is inverted: true is bad.
   add(!c.worldDemoBypass, 'World demo bypass is OFF',
     c.worldDemoBypass ? 'NEXT_PUBLIC_WORLD_DEMO is on. Anyone can mark themselves verified.' : '');
