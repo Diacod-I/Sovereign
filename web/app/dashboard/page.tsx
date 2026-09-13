@@ -30,7 +30,7 @@ import { useDirectory } from '../lib/useDirectory';
 import { readVerification, mergeVerification, type SellerVerification } from '../lib/world';
 import { fetchVerification, useVerified } from '../lib/verification';
 import {
-  TRACK_RECORD_FIELDS, addPending, fetchReceipts, readPending, removePending,
+  TRACK_RECORD_FIELDS, addPending, fetchReceipts, fetchTrackRecord, readPending, removePending,
   readHandoff, receiptsConfigured, toTrackRecord, useFileReceipt,
   type PendingReview, type ReceiptRow,
 } from '../lib/receipts';
@@ -372,16 +372,29 @@ function ReceiptRowView({ r }: { r: ReceiptRow }) {
 // The MCP detail body — shown in the click modal. Every field here is on-chain.
 function McpDetails({ l, sellerName }: { l: Listing; sellerName: string }) {
   const tags = l.tags ? l.tags.split(',').map((t) => t.trim()).filter(Boolean) : [];
-  const score = scoreOf(l.record);
   const [history, setHistory] = useState<ReceiptRow[] | null>(null);
+  const [live, setLive] = useState<TrackRecord | null>(null);
+  const [showAll, setShowAll] = useState(false);
 
-  // Previous work is fetched lazily — the marketplace grid only needs the
-  // aggregates, and most listings are never opened.
+  // Both halves refetch on open. The grid's copy of the track record is as old
+  // as the page, and the most common way to open a profile is right after
+  // grading a call in a terminal -- precisely when the stale number is the one
+  // the buyer is looking for.
   useEffect(() => {
     let alive = true;
     fetchReceipts(l.id, 12).then((rows) => { if (alive) setHistory(rows); });
+    fetchTrackRecord(l.id).then((r) => { if (alive && r) setLive(r); });
     return () => { alive = false; };
   }, [l.id]);
+
+  const record = live ?? l.record;
+  const score = scoreOf(record);
+
+  // Three is enough to show a pattern. A profile that opens onto twelve rows
+  // buries the score, which is the thing a buyer came to read.
+  const VISIBLE = 3;
+  const shown = history ? (showAll ? history : history.slice(0, VISIBLE)) : [];
+  const hidden = history ? Math.max(0, history.length - VISIBLE) : 0;
 
   return (
     <>
@@ -390,7 +403,7 @@ function McpDetails({ l, sellerName }: { l: Listing; sellerName: string }) {
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className="font-medium">{l.name}</span>
-            <ScoreBadge record={l.record} />
+            <ScoreBadge record={record} />
           </div>
           <div className="text-xs text-muted">by {sellerName} · {score.tierLabel}</div>
         </div>
@@ -411,7 +424,7 @@ function McpDetails({ l, sellerName }: { l: Listing; sellerName: string }) {
           <span className="text-[10px] uppercase tracking-wider text-muted">Track record</span>
           {score.overall !== null && (
             <span className="font-mono text-[10px] text-muted">
-              {l.record.receiptCount} graded call{l.record.receiptCount === 1 ? '' : 's'} · {formatUsdc(l.record.totalPaid)} USDC earned
+              {record.receiptCount} graded call{record.receiptCount === 1 ? '' : 's'} · {formatUsdc(record.totalPaid)} USDC earned
             </span>
           )}
         </div>
@@ -435,9 +448,19 @@ function McpDetails({ l, sellerName }: { l: Listing; sellerName: string }) {
             No graded calls yet.
           </p>
         ) : (
-          <ul className="mt-2 flex flex-col">
-            {history.map((r) => <ReceiptRowView key={r.id} r={r} />)}
-          </ul>
+          <>
+            <ul className="mt-2 flex flex-col">
+              {shown.map((r) => <ReceiptRowView key={r.id} r={r} />)}
+            </ul>
+            {hidden > 0 && (
+              <button
+                onClick={() => setShowAll((v) => !v)}
+                className="mt-2 text-[10px] text-muted underline underline-offset-2 transition-colors hover:text-foreground"
+              >
+                {showAll ? 'Show less' : `Show ${hidden} more`}
+              </button>
+            )}
+          </>
         )}
       </div>
 

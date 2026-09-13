@@ -105,6 +105,28 @@ export async function fetchReceipts(agentId: string, first = 20): Promise<Receip
   }
 }
 
+/**
+ * The live aggregates for ONE agent.
+ *
+ * The marketplace grid loads every listing's track record once, which is right
+ * for a grid and wrong for a profile: a buyer who grades a call in their
+ * terminal and then opens the worker comes back to the numbers as they were
+ * when the page loaded. The receipt list refetches on open and the bars did
+ * not, so the profile disagreed with itself. This is the missing half.
+ */
+export async function fetchTrackRecord(agentId: string): Promise<TrackRecord | null> {
+  try {
+    const data = await query<{ agent: Record<string, unknown> | null }>(
+      `query($id: ID!) { agent(id: $id) { ${TRACK_RECORD_FIELDS} } }`,
+      { id: agentId },
+    );
+    return data.agent ? toTrackRecord(data.agent) : null;
+  } catch {
+    // Keep whatever the grid already had rather than blanking a real record.
+    return null;
+  }
+}
+
 export type ReceiptInput = {
   agentId: string;
   /** Tx hash of the payment this grades. Doubles as the anti-replay key. */
