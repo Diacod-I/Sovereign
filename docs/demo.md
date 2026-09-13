@@ -33,7 +33,7 @@ Top to bottom. Anything that fails here fails on camera.
 
 - [ ] Embedded wallet funded with Arc USDC, for gas
 - [ ] Agent spending balance at 2 USDC or more
-- [ ] Worker allowlisted, with a per-call cap
+- [ ] Worker allowlisted
 - [ ] Daily budget comfortably above three runs
 - [ ] World ID verified, badge visible
 
@@ -103,8 +103,8 @@ This beat is new and it is the strongest thirty seconds in the video. Say it
 looking at the terminal, then cut to the dashboard:
 
 > Notice it never asked my permission. It did not need to. I allowlisted that
-> worker, set a per-call cap, and set a daily budget, and the server checks all
-> three before it signs anything. The limits are the permission. That is what
+> worker, and I set a per-action limit and a daily budget, and the server checks
+> all three before it signs anything. The limits are the permission. That is what
 > makes this delegation instead of a blank cheque.
 
 Show the spend bar having moved. If you want a refusal on camera, set the

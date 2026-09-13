@@ -25,7 +25,6 @@ export type AllowEntry = {
   listingId: string;
   name: string;
   address: string;
-  cap: number;
 };
 
 export type AccountPolicy = {
@@ -63,7 +62,7 @@ export async function readPolicy(account: string): Promise<AccountPolicy | null>
 /**
  * Saves the LIMITS. Never the spend.
  *
- * The browser owns what the caps are; the server owns how much has been used,
+ * The browser owns what the limits are; the server owns how much has been used,
  * because only the server sees a terminal's calls. Taking `spentToday` from the
  * request looked harmless and was not: opening the dashboard and pressing Save
  * pushed a browser-local 0 over a real balance, so every edit to a limit
@@ -86,7 +85,6 @@ export async function writePolicy(account: string, next: { policy: SpendPolicy; 
       listingId: String(w.listingId ?? '').slice(0, 120),
       name: String(w.name ?? '').slice(0, 120),
       address: String(w.address ?? ''),
-      cap: Math.max(0, Number(w.cap) || 0),
     })),
     updatedAt: Date.now(),
   };
@@ -127,9 +125,6 @@ export function checkPolicy(
 
   const entry = allowlist.find((w) => w.address.toLowerCase() === payTo.toLowerCase());
   if (!entry) return { ok: false, reason: 'This worker is not on your allowlist. Add it in the marketplace first.' };
-  if (entry.cap && priceUsdc > entry.cap) {
-    return { ok: false, reason: `Over this worker's per-call cap ($${entry.cap}).` };
-  }
   if (priceUsdc > policy.perAction) {
     return { ok: false, reason: `Over your per-action limit ($${policy.perAction}).` };
   }

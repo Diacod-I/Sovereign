@@ -91,13 +91,17 @@ type AllowEntry = {
   listingId: string;
   name: string;
   address: string;
-  cap: number;
   /**
-   * Dead field, kept so entries written by the multi-agent build still parse.
+   * Dead fields, kept so entries written by earlier builds still parse. `cap`
+   * was a per-worker price ceiling, which had nothing left to constrain once a
+   * listing's price came from the chain; agentIds scoped an entry to particular
+   * buyer agents, which stopped meaning anything when there stopped being more
+   * than one.
    * Scoping an entry to particular buyer agents stopped meaning anything when
    * there stopped being more than one.
    */
   agentIds?: string[] | null;
+  cap?: number;
 };
 
 const INITIAL_ALLOWLIST: AllowEntry[] = [];
@@ -468,8 +472,6 @@ export default function Dashboard() {
   const [allowlist, setAllowlist] = useState<AllowEntry[]>(INITIAL_ALLOWLIST);
   const [policyReady, setPolicyReady] = useState(false);
 
-  // Listing awaiting a per-call cap before it joins the allowlist.
-  const [allowFor, setAllowFor] = useState<Listing | null>(null);
   // Paid calls the buyer has not graded yet.
   const [pending, setPending] = useState<PendingReview[]>([]);
   const [reviewing, setReviewing] = useState<PendingReview | null>(null);
@@ -760,12 +762,6 @@ export default function Dashboard() {
     });
   };
 
-  const setCap = (id: string, v: string) =>
-    setAllowlist((list) => {
-      const next = list.map((w) => (w.id === id ? { ...w, cap: Number(v) || 0 } : w));
-      syncAllowlist(next);
-      return next;
-    });
   const removeWl = (id: string) =>
     setAllowlist((list) => {
       const next = list.filter((w) => w.id !== id);
@@ -787,22 +783,26 @@ export default function Dashboard() {
   const verifiedCount = servable.filter((l) => isVerifiedOwner(l.owner)).length;
   const isAllowlisted = (id: string) => allowlist.some((w) => w.listingId === id);
 
-  /** Asks for a per-call cap before trusting a worker, rather than assuming one. */
+  /**
+   * Trusting a worker is one click.
+   *
+   * This used to open a modal asking for a per-call cap. It was a limit with
+   * nothing to constrain: a worker has exactly one price, set by its seller and
+   * read from chain, so the only cap that ever made sense was that price, and
+   * the only thing a buyer could do with the field was set it wrong. The
+   * per-action limit already covers "nothing over this much", account-wide,
+   * where a buyer can actually reason about it.
+   */
   const addToAllowlist = (l: Listing) => {
     if (isAllowlisted(l.id)) return;
-    setAllowFor(l);
-  };
-
-  const commitAllowlist = (l: Listing, cap: number) => {
     setAllowlist((list) => {
       const next = [
         ...list.filter((w) => w.listingId !== l.id),
-        { id: 'wl_' + l.id, listingId: l.id, name: l.name, address: l.payTo, cap },
+        { id: 'wl_' + l.id, listingId: l.id, name: l.name, address: l.payTo },
       ];
       syncAllowlist(next);
       return next;
     });
-    setAllowFor(null);
   };
 
   const reloadWallet = () => setWalletNonce((n) => n + 1);
@@ -1183,7 +1183,7 @@ export default function Dashboard() {
           {tab === 'allowlist' && (
             <>
               <h1 className="text-2xl font-semibold tracking-tight">Allowlist</h1>
-              <p className="mt-1 text-sm text-muted">Workers you can pay without approving each call, each with its own per-call cap.</p>
+              <p className="mt-1 text-sm text-muted">Workers your agent can pay without asking you first, inside your spend limits.</p>
               {allowlist.length === 0 ? (
                 <div className="mt-6 rounded-xl border border-hairline bg-panel p-8 text-center text-sm text-muted">No workers allowlisted yet. Add them from the Marketplace.</div>
               ) : (
@@ -1198,16 +1198,7 @@ export default function Dashboard() {
                             <button onClick={() => setOpenId(w.listingId)} className="inline-flex items-center gap-1 text-sm text-muted transition-colors hover:text-foreground">Details<ArrowUpRight /></button>
                           </div>
                         </div>
-                        <div className="flex items-center gap-3">
-                          <label className="flex items-center gap-2 text-sm">
-                            <span className="text-muted">Per-call cap</span>
-                            <span className="flex items-center rounded-lg border border-hairline bg-background pl-2 focus-within:border-accent">
-                              <span className="text-sm text-muted">$</span>
-                              <input value={String(w.cap)} onChange={(e) => setCap(w.id, e.target.value)} inputMode="decimal" className="w-16 bg-transparent px-1.5 py-1.5 text-sm outline-none" />
-                            </span>
-                          </label>
-                          <button onClick={() => removeWl(w.id)} className="text-sm text-muted transition-colors hover:text-red-400">Remove</button>
-                        </div>
+                        <button onClick={() => removeWl(w.id)} className="text-sm text-muted transition-colors hover:text-red-400">Remove</button>
                       </div>
 
                     </div>
@@ -1279,14 +1270,6 @@ export default function Dashboard() {
           reason="A review is the only thing another buyer has to go on. One person with ten wallets could five-star their own worker to the top of the marketplace, so a receipt has to come from a human who can only do it once."
           onVerified={(v) => { setWorldV(v); const r = gatedReview; setGatedReview(null); setReviewing(r); }}
           onClose={() => setGatedReview(null)}
-        />
-      )}
-      {allowFor && (
-        <AllowlistCapModal
-          listing={allowFor}
-          policy={policy}
-          onConfirm={(cap) => commitAllowlist(allowFor, cap)}
-          onClose={() => setAllowFor(null)}
         />
       )}
 
@@ -1449,76 +1432,6 @@ function ReviewModal({
           </div>
         </>
       )}
-    </ModalShell>
-  );
-}
-
-/**
- * The one decision worth making at the moment you trust a worker: how much a
- * single call of theirs may cost.
- *
- * This used to also ask which of your buyer agents the entry applied to. With one
- * policy per account that question has no answer left to give, so the modal is
- * the cap and nothing else — pre-filled from the listing's own price, which is
- * what a buyer almost always means by "yes, this much".
- */
-function AllowlistCapModal({
-  listing, policy, onConfirm, onClose,
-}: {
-  listing: Listing;
-  policy: SpendPolicy;
-  onConfirm: (cap: number) => void;
-  onClose: () => void;
-}) {
-  const price = Number(listing.price || 0);
-  // Headroom rather than the exact price: a worker that later raises its price by
-  // a cent would otherwise be silently blocked by a cap the buyer never revisited.
-  const [cap, setCap] = useState(String(Math.max(1, Math.ceil(price * 2)) || 5));
-  const capNum = Number(cap) || 0;
-
-  return (
-    <ModalShell onClose={onClose}>
-      <h2 className="text-lg font-semibold tracking-tight">Allowlist “{listing.name}”</h2>
-      <p className="mt-1 text-sm text-muted">
-        Allowlisted workers can be paid without approving each call, up to the cap you set here.
-      </p>
-
-      <div className="mt-4 rounded-lg border border-hairline bg-background p-3 text-sm">
-        <div className="flex items-center justify-between"><span className="text-muted">Charges</span><span className="font-mono">{listing.price} USDC/call</span></div>
-        <div className="mt-1 flex items-center justify-between"><span className="text-muted">Pays to</span><span className="font-mono text-xs">{shortHash(listing.payTo)}</span></div>
-      </div>
-
-      <label className="mt-4 block text-sm">
-        <span className="text-muted">Per-call cap for this worker (USDC)</span>
-        <input
-          autoFocus
-          value={cap}
-          onChange={(e) => setCap(e.target.value)}
-          inputMode="decimal"
-          className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent"
-        />
-      </label>
-
-      {capNum > 0 && price > capNum && (
-        <div className="mt-2 text-[11px] leading-relaxed text-amber-400">
-          This worker charges ${price} per call, above the ${capNum} cap — every hire would be refused.
-        </div>
-      )}
-      {price > policy.perAction && (
-        <div className="mt-2 text-[11px] leading-relaxed text-amber-400">
-          Your per-action limit is ${policy.perAction}, below this worker&apos;s ${price} — raise it on Overview or hires will still be blocked.
-        </div>
-      )}
-
-      <div className="mt-5 flex gap-3">
-        <button
-          onClick={() => onConfirm(capNum)}
-          className="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90"
-        >
-          Add to allowlist
-        </button>
-        <button onClick={onClose} className="rounded-lg border border-hairline px-4 py-2.5 text-sm text-muted hover:text-foreground">Cancel</button>
-      </div>
     </ModalShell>
   );
 }
