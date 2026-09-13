@@ -1,0 +1,143 @@
+{
+  "name": "Sovereign — Dependency Risk Review (LLM)",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sovereign-llm-depscan",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "build",
+      "name": "Build request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        200,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nconst input = body.input || {};\n\nlet pkgs = [];\nif (Array.isArray(input.packages)) {\n  pkgs = input.packages;\n} else if (input.dependencies && typeof input.dependencies === 'object') {\n  // A package.json dependencies block, pasted whole. Ranges are stripped to a\n  // concrete version, because \"is ^4.17.20 safe\" is not a question anyone can\n  // answer: the range covers versions that differ in exactly the way that\n  // matters.\n  pkgs = Object.entries(input.dependencies).map(([name, range]) => ({\n    name,\n    version: String(range).replace(/^[\\^~>=<\\s]+/, ''),\n    ecosystem: input.ecosystem || 'npm',\n  }));\n}\n\npkgs = pkgs\n  .filter((p) => p && p.name && p.version)\n  .map((p) => ({\n    name: String(p.name),\n    version: String(p.version),\n    ecosystem: String(p.ecosystem || input.ecosystem || 'npm'),\n  }))\n  // Lower than the OSV worker's 100 on purpose. This one spends a model's\n  // attention per package rather than a row lookup, and quality falls off well\n  // before a context limit does.\n  .slice(0, 40);\n\nif (!pkgs.length) {\n  throw new Error('Send {\"input\":{\"packages\":[{\"name\",\"version\",\"ecosystem\"}]}} or {\"input\":{\"dependencies\":{...}}}');\n}\n\n// Whatever model this seller's account actually has. This is the one line to\n// change; everything downstream reads it back rather than assuming.\nconst MODEL = 'claude-sonnet-4-5';\n\nconst system = [\n  'You are a dependency risk reviewer. You assess named package versions for known',\n  'security advisories, maintenance risk, and upgrade urgency.',\n  '',\n  'Reply with a single JSON object and nothing else. No prose, no markdown fence.',\n  '',\n  'Schema:',\n  '{',\n  '  \"assessed\": [',\n  '    {',\n  '      \"package\": string,',\n  '      \"version\": string,',\n  '      \"knownAdvisories\": [{ \"id\": string, \"summary\": string, \"fixedIn\": string | null }],',\n  '      \"severity\": \"none\" | \"low\" | \"medium\" | \"high\" | \"critical\",',\n  '      \"maintenanceRisk\": string,',\n  '      \"recommendation\": string,',\n  '      \"confidence\": \"high\" | \"medium\" | \"low\"',\n  '    }',\n  '  ]',\n  '}',\n  '',\n  'Rules:',\n  '- Return exactly one entry per package given, in the same order. Never omit one.',\n  '- Only list an advisory you actually know. Never invent an identifier; a wrong',\n  '  CVE number is worse than none, because it will be believed.',\n  '- If you are unsure whether a version is affected, use severity \"none\" with',\n  '  confidence \"low\" and say why in recommendation. Silence is not safety, and a',\n  '  buyer acting on a false all-clear is the failure mode that matters here.',\n  '- Your training data has a cutoff. Advisories published after it are invisible',\n  '  to you. Say so in recommendation for any widely used package.',\n  '- maintenanceRisk is about the project, not the CVE: release cadence, whether it',\n  '  is archived or superseded, single-maintainer exposure, install-time scripts.',\n  '  This is the part a live advisory feed cannot tell anyone.',\n].join('\\n');\n\nconst user = 'Assess these dependencies:\\n' + JSON.stringify(pkgs, null, 2);\n\nreturn [{ json: {\n  pkgs,\n  model: MODEL,\n  requestBody: {\n    model: MODEL,\n    max_tokens: 4096,\n    temperature: 0,\n    system,\n    messages: [{ role: 'user', content: user }],\n  },\n} }];"
+      }
+    },
+    {
+      "id": "claude",
+      "name": "Claude messages",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        400,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.requestBody) }}",
+        "options": {
+          "timeout": 120000
+        }
+      }
+    },
+    {
+      "id": "validate",
+      "name": "Validate result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        600,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const res = $input.first().json;\nconst built = $('Build request').first().json;\nconst pkgs = built.pkgs;\n\n// Everything below refuses rather than degrades. A review worker that answers\n// \"nothing found\" when the model failed, drifted off-schema, or skipped half the\n// list is selling a clean bill of health for a question it never asked. That is\n// the one failure a buyer cannot detect from the outside, so it has to be\n// impossible from the inside.\n\nif (res && res.type === 'error') {\n  throw new Error('Anthropic returned an error: ' + JSON.stringify(res.error || res).slice(0, 300));\n}\n\nconst parts = Array.isArray(res.content) ? res.content : null;\nif (!parts) {\n  throw new Error('Anthropic did not return a message: ' + JSON.stringify(res).slice(0, 300));\n}\nif (res.stop_reason === 'max_tokens') {\n  throw new Error('The model hit max_tokens and its JSON is truncated. Send fewer packages.');\n}\n\nconst text = parts.filter((p) => p && p.type === 'text').map((p) => p.text).join('').trim();\n\n// Models fence JSON even when told not to. Strip one fence rather than failing\n// on a response that is otherwise perfectly good.\nconst unfenced = text.replace(/^```(?:json)?\\s*/i, '').replace(/\\s*```$/, '').trim();\n\nlet parsed;\ntry {\n  parsed = JSON.parse(unfenced);\n} catch (e) {\n  throw new Error('The model did not return JSON. First 300 chars: ' + unfenced.slice(0, 300));\n}\n\nconst assessed = parsed.assessed;\nif (!Array.isArray(assessed)) {\n  throw new Error('The model returned JSON without an \"assessed\" array: ' + unfenced.slice(0, 300));\n}\n\n// Order is not trusted; membership is. A model that quietly drops a package\n// would otherwise produce a shorter, cleaner-looking report.\nconst seen = new Set(assessed.map((a) => String((a && a.package) || '').toLowerCase()));\nconst missing = pkgs.filter((p) => !seen.has(p.name.toLowerCase())).map((p) => p.name);\nif (missing.length) {\n  throw new Error('The model skipped ' + missing.length + ' package(s): ' + missing.join(', '));\n}\n\nconst LEVELS = ['none', 'low', 'medium', 'high', 'critical'];\nconst findings = assessed.filter((a) => {\n  const sev = String((a && a.severity) || 'none').toLowerCase();\n  const adv = Array.isArray(a && a.knownAdvisories) ? a.knownAdvisories : [];\n  return adv.length > 0 || (LEVELS.indexOf(sev) > 0);\n});\n\n// Low confidence is a finding of its own. \"I am not sure this is clean\" is\n// information the buyer paid for and must not be filtered out of the summary.\nconst unsure = assessed.filter((a) => String((a && a.confidence) || '').toLowerCase() === 'low');\n\nreturn [{ json: { output: {\n  scanned: pkgs.length,\n  flagged: findings.length,\n  lowConfidence: unsure.length,\n  findings,\n  assessed,\n  method: 'llm-review',\n  model: built.model,\n  source: 'model knowledge, not a live advisory feed',\n  caveat: 'This is a language model\\'s judgement, bounded by its training cutoff. ' +\n    'It can reason about maintenance and supply-chain risk that no feed encodes, ' +\n    'and it can miss an advisory published after that cutoff. Pair it with a live ' +\n    'feed scan for completeness; neither one alone is a full answer.',\n  tokens: res.usage || null,\n  checkedAt: new Date().toISOString(),\n} } }];"
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        800,
+        0
+      ],
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Build request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build request": {
+      "main": [
+        [
+          {
+            "node": "Claude messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude messages": {
+      "main": [
+        [
+          {
+            "node": "Validate result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate result": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {}
+}
