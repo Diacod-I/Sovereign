@@ -744,9 +744,34 @@ export default function Dashboard() {
     return <OnboardingCard logout={logout} onDone={(p) => setOrg(p.name)} />;
   }
 
+  /**
+   * Pushes the allowlist to the server, which is the only copy that binds.
+   *
+   * Allowlisting a worker in this browser and having a terminal still refused
+   * was the most confusing failure in the product, because both screens looked
+   * right: the marketplace showed the worker as trusted and the terminal said
+   * it was not on the allowlist. Adding a worker IS the act of authorising it,
+   * so it has to travel on its own rather than wait for somebody to find a
+   * Sync button on a different tab.
+   */
+  const syncAllowlist = (list: AllowEntry[]) => {
+    void policySync.save(policy, list).then((spend) => {
+      if (spend) setPolicy((p) => ({ ...p, ...spend }));
+    });
+  };
+
   const setCap = (id: string, v: string) =>
-    setAllowlist((list) => list.map((w) => (w.id === id ? { ...w, cap: Number(v) || 0 } : w)));
-  const removeWl = (id: string) => setAllowlist((list) => list.filter((w) => w.id !== id));
+    setAllowlist((list) => {
+      const next = list.map((w) => (w.id === id ? { ...w, cap: Number(v) || 0 } : w));
+      syncAllowlist(next);
+      return next;
+    });
+  const removeWl = (id: string) =>
+    setAllowlist((list) => {
+      const next = list.filter((w) => w.id !== id);
+      syncAllowlist(next);
+      return next;
+    });
 
   const openListing = market.find((l) => l.id === openId) || null;
   // Curated before anything else. A listing this deployment declines to serve
@@ -769,10 +794,14 @@ export default function Dashboard() {
   };
 
   const commitAllowlist = (l: Listing, cap: number) => {
-    setAllowlist((list) => [
-      ...list.filter((w) => w.listingId !== l.id),
-      { id: 'wl_' + l.id, listingId: l.id, name: l.name, address: l.payTo, cap },
-    ]);
+    setAllowlist((list) => {
+      const next = [
+        ...list.filter((w) => w.listingId !== l.id),
+        { id: 'wl_' + l.id, listingId: l.id, name: l.name, address: l.payTo, cap },
+      ];
+      syncAllowlist(next);
+      return next;
+    });
     setAllowFor(null);
   };
 
@@ -987,10 +1016,9 @@ export default function Dashboard() {
                     </button>
                   </div>
 
-                  {/* The limits above live in this browser. Your agent asks the
-                      server, which is a different copy, and an unsynced account
-                      is why a paired terminal gets refused with no explanation
-                      that mentions syncing. */}
+                  {/* Limits and the allowlist now push themselves whenever they
+                      change. This stays as the manual retry, because the push
+                      needs a signature and a signature can be dismissed. */}
                   <div className="mt-3 border-t border-hairline pt-3">
                     <button
                       onClick={() => void policySync.save(policy, allowlist)}
@@ -1005,8 +1033,8 @@ export default function Dashboard() {
                     </button>
                     <p className="mt-2 text-[10px] leading-relaxed text-muted">
                       Your agent reads these limits and your allowlist from the server, not from
-                      this browser. Editing a limit syncs on its own; use this after changing the
-                      allowlist, or if a sync failed. Signing costs nothing.
+                      this browser. Both sync on their own when you change them; this is here for
+                      when a sync failed. Signing costs nothing.
                     </p>
                     {policySync.error && (
                       <p className="mt-2 text-[10px] leading-relaxed text-red-400">{policySync.error}</p>
