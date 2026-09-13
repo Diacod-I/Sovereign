@@ -63,12 +63,9 @@ watch the score move. That is the demo. Everything before it is plumbing.
 
 Set these on Overview, run, then put them back.
 
-**Approval threshold 0.20.** Ask for the sanctions check at 0.25:
+**Per action 0.05.** Ask for the scan at 0.10:
 
-> This is at or above your approval threshold, so it needs you in a browser
-> rather than an agent deciding alone.
-
-A refusal, not a prompt, because there is no human in a terminal to prompt.
+> NOT HIRED. You were NOT charged. Reason: Over your per-action limit ($0.05).
 
 **Daily budget 0.15.** Run the scan twice. The second:
 

@@ -19,6 +19,15 @@ import { policySignMessage } from './policyMessage';
 
 export type SyncState = 'idle' | 'saving' | 'saved' | 'error';
 
+/**
+ * What the server says has been spent today.
+ *
+ * Returned by both operations because the browser cannot know it. Spending
+ * happens in a terminal, against the server's copy, and the dashboard's own
+ * number is only ever a cache of a value it does not own.
+ */
+export type ServerSpend = { spentToday: number; spentOn?: string } | null;
+
 type Signer = (
   args: { message: string },
   opts: { address: string },
@@ -29,7 +38,7 @@ export function usePolicySync(address: string | null, signMessage: Signer) {
   const [error, setError] = useState<string | null>(null);
 
   const save = useCallback(
-    async (policy: unknown, allowlist: unknown[]): Promise<boolean> => {
+    async (policy: unknown, allowlist: unknown[]): Promise<ServerSpend | false> => {
       if (!address) return false;
       setState('saving');
       setError(null);
@@ -48,7 +57,11 @@ export function usePolicySync(address: string | null, signMessage: Signer) {
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data?.error) throw new Error(data?.error || `HTTP ${res.status}`);
         setState('saved');
-        return true;
+        // The response carries the server's own spend, which this save did not
+        // and must not touch. Handing it back is what lets the dashboard show a
+        // number earned by calls it never saw.
+        const p = data?.saved?.policy;
+        return p ? { spentToday: Number(p.spentToday) || 0, spentOn: p.spentOn } : null;
       } catch (e) {
         setState('error');
         setError(e instanceof Error ? e.message : 'Could not save your limits.');
@@ -58,5 +71,38 @@ export function usePolicySync(address: string | null, signMessage: Signer) {
     [address, signMessage],
   );
 
-  return { save, state, error };
+  /**
+   * Reads the server's spend back, at the cost of one signature.
+   *
+   * Not automatic on mount: the read is authorised by a wallet signature, and
+   * prompting somebody the moment they open a page is worse than letting them
+   * ask. Saving limits refreshes it for free, so in practice this is for
+   * "I just paid from the terminal and want to watch the bar move".
+   */
+  const refresh = useCallback(async (): Promise<ServerSpend | false> => {
+    if (!address) return false;
+    setError(null);
+    try {
+      const issuedAt = new Date().toISOString();
+      const { signature } = await signMessage(
+        { message: policySignMessage('read', address, issuedAt) },
+        { address },
+      );
+      const res = await fetch('/api/policy', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ op: 'read', account: address, issuedAt, signature }),
+        signal: AbortSignal.timeout(20000),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.error) throw new Error(data?.error || `HTTP ${res.status}`);
+      const p = data?.saved?.policy;
+      return p ? { spentToday: Number(p.spentToday) || 0, spentOn: p.spentOn } : null;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not read your spend.');
+      return false;
+    }
+  }, [address, signMessage]);
+
+  return { save, refresh, state, error };
 }

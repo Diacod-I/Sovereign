@@ -72,7 +72,6 @@ const short = (a: string) => a.slice(0, 6) + '…' + a.slice(-4);
 export type SpendPolicy = {
   dailyBudget: number;
   perAction: number;
-  approvalThreshold: number;
   spentToday: number;
   /** UTC day (YYYY-MM-DD) that spentToday counts against. */
   spentOn?: string;
@@ -83,7 +82,6 @@ export type SpendPolicy = {
 const DEFAULT_POLICY: SpendPolicy = {
   dailyBudget: 250,
   perAction: 50,
-  approvalThreshold: 100,
   spentToday: 0,
   paused: false,
 };
@@ -139,7 +137,6 @@ function loadPolicy(): SpendPolicy {
         return rollDaily({
           dailyBudget: Number(a.dailyBudget) || DEFAULT_POLICY.dailyBudget,
           perAction: Number(a.perAction) || DEFAULT_POLICY.perAction,
-          approvalThreshold: Number(a.approvalThreshold) || DEFAULT_POLICY.approvalThreshold,
           spentToday: Number(a.spentToday) || 0,
           spentOn: a.spentOn,
           paused: a.status === 'paused',
@@ -964,12 +961,25 @@ export default function Dashboard() {
                   <div className="mt-4 grid grid-cols-2 gap-y-2 text-sm">
                     <div className="text-muted">Daily budget</div><div className="text-right font-mono">${policy.dailyBudget}</div>
                     <div className="text-muted">Per action</div><div className="text-right font-mono">${policy.perAction}</div>
-                    <div className="text-muted">Approval over</div><div className="text-right font-mono">${policy.approvalThreshold}</div>
                   </div>
                   <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-[#1c1c1c]">
                     <div className="h-full rounded-full bg-accent" style={{ width: `${Math.min(100, (policy.spentToday / policy.dailyBudget) * 100 || 0)}%` }} />
                   </div>
-                  <div className="mt-1 text-[11px] text-muted">${policy.spentToday} of ${policy.dailyBudget} today</div>
+                  <div className="mt-1 flex items-center justify-between text-[11px] text-muted">
+                    <span>${policy.spentToday} of ${policy.dailyBudget} today</span>
+                    {/* Spending happens in a terminal, against the server's copy.
+                        This browser has no way to learn about it on its own, so
+                        the number here is a cache with a button to refill it. */}
+                    <button
+                      onClick={() => void policySync.refresh().then((spend) => {
+                        if (spend) setPolicy((p) => ({ ...p, ...spend }));
+                      })}
+                      disabled={!walletAddress}
+                      className="underline underline-offset-2 transition-colors hover:text-foreground disabled:opacity-40"
+                    >
+                      Refresh
+                    </button>
+                  </div>
                   <div className="mt-3 flex gap-2">
                     <button onClick={() => setEditPolicy(true)} className="flex-1 rounded-lg border border-hairline px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground">Edit limits</button>
                     <button onClick={() => setPolicy((p) => ({ ...p, paused: !p.paused }))} className="flex-1 rounded-lg border border-hairline px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground">
@@ -995,8 +1005,8 @@ export default function Dashboard() {
                     </button>
                     <p className="mt-2 text-[10px] leading-relaxed text-muted">
                       Your agent reads these limits and your allowlist from the server, not from
-                      this browser. Sync after changing either, or a paired terminal will be
-                      refused. Signing costs nothing.
+                      this browser. Editing a limit syncs on its own; use this after changing the
+                      allowlist, or if a sync failed. Signing costs nothing.
                     </p>
                     {policySync.error && (
                       <p className="mt-2 text-[10px] leading-relaxed text-red-400">{policySync.error}</p>
@@ -1256,7 +1266,17 @@ export default function Dashboard() {
       {editPolicy && (
         <EditPolicyModal
           policy={policy}
-          onSave={(patch) => setPolicy((p) => ({ ...p, ...patch }))}
+          onSave={(patch) => {
+            // Saving here used to change local state only, leaving the server
+            // on the old limits until somebody noticed a second button further
+            // down the page. An edit that does not reach the place it is
+            // enforced is not an edit, so the push happens here.
+            const next = { ...policy, ...patch };
+            setPolicy(next);
+            void policySync.save(next, allowlist).then((spend) => {
+              if (spend) setPolicy((p) => ({ ...p, ...spend }));
+            });
+          }}
           onClose={() => setEditPolicy(false)}
         />
       )}
@@ -2059,13 +2079,11 @@ function EditPolicyModal({
 }) {
   const [dailyBudget, setDailyBudget] = useState(String(policy.dailyBudget));
   const [perAction, setPerAction] = useState(String(policy.perAction));
-  const [approvalThreshold, setApprovalThreshold] = useState(String(policy.approvalThreshold));
 
   const save = () => {
     onSave({
       dailyBudget: Number(dailyBudget) || 0,
       perAction: Number(perAction) || 0,
-      approvalThreshold: Number(approvalThreshold) || 0,
     });
     onClose();
   };
@@ -2073,14 +2091,12 @@ function EditPolicyModal({
   return (
     <ModalShell onClose={onClose}>
       <h2 className="text-lg font-semibold tracking-tight">Edit spend limits</h2>
-      <p className="mt-1 text-sm text-muted">Enforced before every hire, whether you or Claude starts it.</p>
+      <p className="mt-1 text-sm text-muted">Enforced before every hire, whether you or Claude starts it. Saving syncs them to your agent.</p>
       <div className="mt-5 flex flex-col gap-3">
         <label className="text-sm"><span className="text-muted">Daily budget (USDC)</span>
           <input value={dailyBudget} onChange={(e) => setDailyBudget(e.target.value)} inputMode="decimal" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" /></label>
         <label className="text-sm"><span className="text-muted">Per action (USDC)</span>
           <input value={perAction} onChange={(e) => setPerAction(e.target.value)} inputMode="decimal" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" /></label>
-        <label className="text-sm"><span className="text-muted">Require approval over (USDC)</span>
-          <input value={approvalThreshold} onChange={(e) => setApprovalThreshold(e.target.value)} inputMode="decimal" className="mt-1 w-full rounded-lg border border-hairline bg-background px-3 py-2 outline-none focus:border-accent" /></label>
       </div>
       <div className="mt-5 flex gap-3">
         <button onClick={save} className="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90">Save limits</button>

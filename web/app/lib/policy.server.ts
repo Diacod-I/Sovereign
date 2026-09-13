@@ -14,7 +14,6 @@ import { kvGet, kvSet } from './kv';
 export type SpendPolicy = {
   dailyBudget: number;
   perAction: number;
-  approvalThreshold: number;
   spentToday: number;
   /** UTC day (YYYY-MM-DD) that spentToday counts against. */
   spentOn?: string;
@@ -38,7 +37,6 @@ export type AccountPolicy = {
 export const DEFAULT_POLICY: SpendPolicy = {
   dailyBudget: 250,
   perAction: 50,
-  approvalThreshold: 100,
   spentToday: 0,
   paused: false,
 };
@@ -62,14 +60,25 @@ export async function readPolicy(account: string): Promise<AccountPolicy | null>
   }
 }
 
+/**
+ * Saves the LIMITS. Never the spend.
+ *
+ * The browser owns what the caps are; the server owns how much has been used,
+ * because only the server sees a terminal's calls. Taking `spentToday` from the
+ * request looked harmless and was not: opening the dashboard and pressing Save
+ * pushed a browser-local 0 over a real balance, so every edit to a limit
+ * silently refunded the day's spending. The two values travel in opposite
+ * directions and only one of them belongs in this payload.
+ */
 export async function writePolicy(account: string, next: { policy: SpendPolicy; allowlist: AllowEntry[] }) {
+  const current = await readPolicy(account);
+  const spent = rollDaily(current?.policy ?? { ...DEFAULT_POLICY });
   const clean: AccountPolicy = {
     policy: rollDaily({
       dailyBudget: Math.max(0, Number(next.policy?.dailyBudget) || 0),
       perAction: Math.max(0, Number(next.policy?.perAction) || 0),
-      approvalThreshold: Math.max(0, Number(next.policy?.approvalThreshold) || 0),
-      spentToday: Math.max(0, Number(next.policy?.spentToday) || 0),
-      spentOn: next.policy?.spentOn,
+      spentToday: spent.spentToday,
+      spentOn: spent.spentOn,
       paused: !!next.policy?.paused,
     }),
     allowlist: (next.allowlist ?? []).slice(0, 200).map((w) => ({
@@ -92,10 +101,12 @@ export type Verdict =
 /**
  * The same rules the browser shows, applied where they bind.
  *
- * `needsApproval` is deliberately a REFUSAL for an agent rather than a prompt:
- * the approval threshold means "a human looks at this", and there is no human in
- * a terminal call. An agent that wants to spend above the line has to send its
- * owner to the browser.
+ * `needsApproval` is retained in the verdict and always false. There was a
+ * third limit here, an approval threshold above which a call was refused and
+ * sent to a human in a browser. It was removed: two limits a person can hold in
+ * their head beat three, and a refusal that means "go somewhere else and do it
+ * by hand" is a worse answer than either paying or declining. The field stays
+ * so callers that branch on it keep compiling.
  */
 export function checkPolicy(
   saved: AccountPolicy | null,
@@ -125,7 +136,7 @@ export function checkPolicy(
   if (policy.spentToday + priceUsdc > policy.dailyBudget) {
     return { ok: false, reason: `Over your daily budget ($${policy.spentToday} of $${policy.dailyBudget} spent).` };
   }
-  return { ok: true, needsApproval: priceUsdc >= policy.approvalThreshold };
+  return { ok: true, needsApproval: false };
 }
 
 /**
