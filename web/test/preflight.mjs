@@ -80,6 +80,18 @@ if (health) {
     c.onChainVerification ? '' : 'Badges stay local to the browser. Optional for a payment demo.');
   // Blocking, and easy to miss, because nothing fails until a buyer has already
   // paid and wants to say the work was bad.
+  // A green "On-chain World ID" used to mean only that a key was present. This
+  // asks the contract whether it trusts that key.
+  add(
+    c.attestorMatches === null || c.attestorMatches === undefined ? null : c.attestorMatches,
+    'World ID attestor matches contract',
+    c.attestorMatches === false
+      ? `Contract trusts ${c.attestorOnChain}, your key is ${c.attestorKeyAddress}. ` +
+        `Verification will revert with BadSignature. Fix with setAttestor, or swap ATTESTOR_PRIVATE_KEY.`
+      : c.attestorMatches === null || c.attestorMatches === undefined
+        ? 'Could not compare. Either no attestor key, no contract address, or Arc was unreachable.'
+        : '',
+  );
   add(c.onChainReceipts === undefined ? null : c.onChainReceipts, 'Grading (Receipts contract)',
     c.onChainReceipts === undefined
       ? 'This deployment predates the check. Redeploy to see it.'

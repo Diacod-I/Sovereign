@@ -17,8 +17,10 @@
 import { kvConfigured, storageUsable } from '../../lib/kv';
 import { secretsConfigured } from '../../lib/hosted.server';
 import { credentialsWork, delegationProblem } from '../../lib/delegate.server';
-import { attestorProblem } from '../../lib/attestation';
+import { attestorAddress, attestorProblem } from '../../lib/attestation';
 import { HIDDEN_LISTINGS } from '../../lib/curation';
+import { VERIFICATIONS_ADDRESS } from '../../lib/verification';
+import { ARC_RPC_URL } from '../../lib/arc';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,6 +28,41 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   const delegation = delegationProblem();
   const attestor = attestorProblem();
+
+  /**
+   * Does the deployed contract actually accept signatures from our key?
+   *
+   * attestorProblem() only says the key is well-formed and an address is set.
+   * It never asked the contract who it trusts, so a rotated key produced a
+   * green board and a BadSignature revert at the same time -- the same shape as
+   * the Privy check that passed on "the variables exist". A public address
+   * compared against a public getter costs one eth_call and removes the guess.
+   */
+  const mine = attestorAddress();
+  let attestorOnChain: string | null = null;
+  if (mine && /^0x[a-fA-F0-9]{40}$/.test(VERIFICATIONS_ADDRESS)) {
+    try {
+      const res = await fetch(ARC_RPC_URL, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0', id: 1, method: 'eth_call',
+          params: [{ to: VERIFICATIONS_ADDRESS, data: '0xcada25c2' }, 'latest'],
+        }),
+        signal: AbortSignal.timeout(6000),
+      });
+      const j = (await res.json()) as { result?: string };
+      if (j.result && j.result.length >= 66) {
+        attestorOnChain = ('0x' + j.result.slice(-40)).toLowerCase();
+      }
+    } catch {
+      // An unreachable RPC is not a configuration fault. Left null, reported
+      // as unknown rather than as a mismatch nobody can act on.
+      attestorOnChain = null;
+    }
+  }
+  const attestorMatches =
+    mine && attestorOnChain ? mine.toLowerCase() === attestorOnChain : null;
   // Configured and working are different questions, and only the second one
   // predicts whether a payment will go through.
   const creds = delegation ? { ok: false as const, detail: delegation } : await credentialsWork();
@@ -45,6 +82,11 @@ export async function GET() {
     privyCredentialsValid: creds.ok,
     // World ID records reaching Arc.
     onChainVerification: attestor === null,
+    // Public addresses, both of them. Shown rather than reduced to a boolean so
+    // a mismatch tells you which one to change.
+    attestorKeyAddress: mine,
+    attestorOnChain,
+    attestorMatches,
     // Whether a buyer can grade a call at all. The whole marketplace rests on
     // reputation, and without this address the review dialog opens, prefills
     // correctly, and leaves its submit button disabled -- so the failure lands
