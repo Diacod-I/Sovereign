@@ -1,51 +1,52 @@
 # Sovereign: 4 minute demo runbook
 
-The pitch, in one line, is the thing to keep saying:
+The line to keep coming back to:
 
 > A freelance marketplace of agents, for your agent.
 
-Judge feedback asked for a happy path and a feedback loop, not a tour. So this
-shows one worker, hired once, graded once, and nothing else. Everything you are
-tempted to add costs you the grading scene, which is the part that was asked for.
+One worker, hired once, graded once. The judges asked for a happy path and a
+feedback loop, not a tour. Anything you add costs you the grading scene, and the
+grading scene is the one that was asked for.
 
 ---
 
 ## Before you hit record
 
-Work top to bottom. Anything that fails here fails on camera.
+Top to bottom. Anything that fails here fails on camera.
 
-**The deployment**
+**Deployment**
 
-- [ ] `git push origin main`, and Vercel shows the newest commit as live
+- [ ] `git push origin main`, Vercel shows the newest commit live
+- [ ] `npm publish` done, `sovereign-mcp` is at 1.9.0 on npm
 - [ ] `npm run preflight` prints `nothing blocking`
-- [ ] In particular these rows are green: Privy credentials ACCEPTED, Grading (Receipts contract), Circle API key, Durable storage
+- [ ] Green in particular: Privy credentials ACCEPTED, Grading (Receipts contract), Circle API key, Durable storage
 
-**The worker you are demoing**
+**The worker**
 
-- [ ] Its webhook answers a plain unpaid POST with real output, tested outside Sovereign first
-- [ ] Listed, active, and visible in the marketplace grid
-- [ ] `curl` it through `/w/<slug>` unpaid and get a 402, not a 500
-- [ ] Run the exact demo input once, end to end, and see it return good output
+- [ ] The dead listing is in `NEXT_PUBLIC_HIDDEN_LISTINGS` and gone from the grid
+- [ ] New listing created from the account you are logged into now
+- [ ] Its `payTo` is the wallet your terminal is linked to
+- [ ] Raw webhook returns real advisories for your demo input
+- [ ] `/w/<slug>` unpaid returns **402**, not 500
 
-**Your buyer account**
+**Buyer account**
 
-- [ ] Logged in on the site with the email account whose wallet Privy knows
 - [ ] Embedded wallet funded with Arc USDC, for gas
-- [ ] Agent spending balance topped up to at least 2 USDC
-- [ ] The worker is on your allowlist
-- [ ] Spend limits edited and synced, daily budget set high enough for three runs
-- [ ] World ID verified, so the badge shows on your profile
+- [ ] Agent spending balance at 2 USDC or more
+- [ ] Worker allowlisted, with a per-call cap
+- [ ] Daily budget comfortably above three runs
+- [ ] World ID verified, badge visible
 
-**The terminal**
+**Terminal**
 
 - [ ] `npx -y sovereign-mcp@latest link --spend`, approved
-- [ ] Claude Code fully quit and restarted afterwards
-- [ ] A dry run returns `"blocking":[]`
-- [ ] Font size up. Whatever you think is big enough is not.
+- [ ] Claude Code fully quit and restarted after both the link and the publish
+- [ ] Dry run returns `"blocking":[]`
+- [ ] Font size up. Bigger than you think.
 
-**The shot**
+**Shot**
 
-- [ ] Browser tab already on the marketplace, logged in, scrolled to the top
+- [ ] Browser on the marketplace, logged in, scrolled to top
 - [ ] Terminal cleared, in the repo root
 - [ ] Notifications off, other tabs closed
 
@@ -53,118 +54,112 @@ Work top to bottom. Anything that fails here fails on camera.
 
 ## The script
 
-Times are ends, not durations. If you are past a mark, cut talking, not scenes.
+Times are ends, not durations. Past a mark, cut talking, not scenes.
 
-### 0:00 to 0:25 — the problem
+### 0:00 to 0:20 — the problem
 
-Terminal or slide. Say it once, plainly:
+> Agents can reason. They cannot pay for anything. So the moment your agent
+> needs work it cannot do itself, a human has to stop, find a service, sign up,
+> and put in a card. Sovereign is a marketplace where your agent hires another
+> agent, pays per call, and the work builds a public track record.
 
-> Agents can already reason. What they cannot do is pay for anything. So the
-> moment your agent needs work it cannot do itself, a person has to step in,
-> find a service, sign up, and hand over a card. Sovereign is a marketplace
-> where your agent hires another agent, pays per call in USDC, and the work
-> builds a public track record.
+Do not say x402 yet. Do not say nanopayments. Show it first.
 
-Do not explain x402 here. Do not say "nanopayments". Show it first.
+### 0:20 to 0:55 — what a buyer sees
 
-### 0:25 to 1:00 — the marketplace, as a buyer would see it
+Browser. Scroll the grid once, then open one worker's profile. Point at, in
+order:
 
-Browser. Scroll the grid once, slowly, then open one worker's profile.
+1. What it does, and the price per call
+2. Track record: calls served, how often it met expectations
+3. The seller, and the World ID badge
 
-Point at, in this order:
+> This is everything a buyer gets before spending anything. What it does, what
+> it costs, and whether anyone has been happy with it before.
 
-1. What it does and what it costs per call
-2. Its track record: calls served, how often it met expectations
-3. The seller's identity and World ID badge
+If it says unproven, say so out loud. It sets up the ending.
 
-Say:
+### 0:55 to 1:45 — your agent hires it
 
-> This is what a buyer sees before spending anything. Price, capability, and
-> whether anyone has been happy with it before.
-
-Say "unproven" out loud if it is unproven. It sets up the ending.
-
-### 1:00 to 1:55 — your agent hires it
-
-Terminal. Type the natural request, not a Sovereign command:
+Terminal. One line, phrased like a person, not a command:
 
 ```
 hire a vulnerability agent from Sovereign to check lodash 4.17.20
 ```
 
-Let it search and come back with the match and the price. Say yes.
-
-While it runs, narrate what is actually happening:
+It searches, picks, pays, and answers without stopping. While it runs:
 
 > It found the worker on chain, the worker quoted a price in a 402, and my
-> wallet signed an authorization for exactly that amount. No key on this
-> machine, no subscription, no card.
+> wallet signed an authorization for exactly that amount. There is no key on
+> this machine, no subscription, no card.
 
-Land on the output and the settlement reference. Say the number out loud:
+Land on the output and the settlement reference. Say the number:
 
-> Ten cents. Paid on Arc, settled through Circle Gateway.
+> Ten cents. Settled on Arc through Circle Gateway.
 
-### 1:55 to 2:20 — the guardrails
+### 1:45 to 2:15 — why it did not ask me
 
-This is short and it earns trust. Either show a refusal you set up beforehand,
-or point at the dashboard while the call is still fresh:
+This beat is new and it is the strongest thirty seconds in the video. Say it
+looking at the terminal, then cut to the dashboard:
 
-> It can only pay workers I allowlisted, under limits I set, and the spend
-> counter moves as it pays. It is not a blank cheque with a language model
-> attached.
+> Notice it never asked my permission. It did not need to. I allowlisted that
+> worker, set a per-call cap, and set a daily budget, and the server checks all
+> three before it signs anything. The limits are the permission. That is what
+> makes this delegation instead of a blank cheque.
 
-If you show a refusal, use the per-action limit. It refuses in the terminal, in
-one line, with the reason.
+Show the spend bar having moved. If you want a refusal on camera, set the
+per-action limit below the price beforehand and run it once: it declines in one
+line, in the terminal, with the reason.
 
-### 2:20 to 3:05 — the part the judges asked for
+### 2:15 to 3:00 — the feedback loop
 
-Back in the terminal. Claude asks whether the work met what you asked for.
-Answer honestly, out loud, and let it file:
+The part the judges asked for. Back in the terminal, tell it your verdict and
+let it file:
 
-> The output was wrong, so I am grading it down. I say so, my agent files the
-> receipt on chain, and it is signed by the wallet that actually paid. You
-> cannot review something you did not buy.
+> The scan missed a known advisory, so I am grading it down. I say what I think,
+> my agent files the receipt on chain, and it is signed by the wallet that
+> actually paid. You cannot review something you did not buy.
 
-Then refresh the worker's profile in the browser and show the record change.
+Then refresh the worker's profile and show the record change.
 
-**This is the most important twenty seconds in the video.** A first graded call
-that is a failure, recorded honestly by the buyer who paid, demonstrates the
-mechanism far better than a wall of five star ratings. Do not hide it.
+**Do not hide a bad grade.** A first graded call that is an honest failure,
+filed by the buyer who paid for it, proves the mechanism far better than a wall
+of five star ratings does.
 
-### 3:05 to 3:35 — the other side of the market
+### 3:00 to 3:30 — the seller side
 
-Browser, seller view. Do not build one live. Show the form and the result:
+Do not build one live. Show the form and the finished listing:
 
 > Anyone with a webhook becomes a paid worker. Paste the URL, set a price, and
-> Sovereign puts the payment wall in front of it. The seller never touches x402
-> and never holds a key for it.
+> Sovereign puts the payment wall in front of it. The seller never implements
+> x402 and never holds a key for it.
 
-### 3:35 to 4:00 — why these sponsors, and close
+### 3:30 to 4:00 — sponsors, then close
 
-Say why each is there, in one sentence each. This was explicitly asked for:
+One sentence each. This was explicitly asked for.
 
 - **Arc and Circle**: the payment is the call. x402 with Circle Gateway settles
-  a tenth of a cent without a subscription, which is the only way per-call
-  hiring works at all.
-- **World ID**: one human, one seller account. Reputation is worthless if a bad
+  a tenth of a cent with no subscription, which is the only way per-call hiring
+  works at all.
+- **World ID**: one human, one seller account. Reputation means nothing if a bad
   seller can start over for free.
 - **The Graph**: track records are read from chain, so the record outlives the
   marketplace showing it.
 
-Close on the one line you opened with.
+Close on the line you opened with.
 
 ---
 
 ## Do not do these on camera
 
-- Do not run `link --spend` live. It needs a browser approval and a restart.
+- Do not run `link --spend` live. Browser approval plus a restart.
 - Do not create a listing live. The on-chain write takes as long as it takes.
 - Do not hire a worker you have not run today.
-- Do not open the Privy or Vercel dashboards. Nothing good is in frame there.
+- Do not open Privy or Vercel. Nothing good is in frame there.
 - Do not say "it should" about anything. Cut the scene instead.
 
-## If something breaks while recording
+## If something breaks mid-take
 
-Keep going and narrate it, or stop and cut. Do not debug on camera. A four
-minute video with one clean paid call and one honest grade beats a six minute
-video that shows everything and works at nothing.
+Keep going and narrate it, or stop and cut. Do not debug on camera. Four minutes
+with one clean paid call and one honest grade beats six minutes that show
+everything and land nothing.
