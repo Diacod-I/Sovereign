@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSendTransaction } from '@privy-io/react-auth';
 import { encodeFunctionData, type Abi } from 'viem';
-import { ARC_CHAIN_ID } from './arc';
+import { ARC_CHAIN_ID, ARC_RPC_URL } from './arc';
 import abiJson from './Verifications.abi.json';
 
 const abi = abiJson as Abi;
@@ -150,8 +150,26 @@ export function useAttest(address: string | null) {
           attestation.signature as `0x${string}`,
         ],
       });
+      // Gas is priced here rather than left to the wallet.
+      //
+      // Sending without these produced a signed transaction carrying gasLimit 0,
+      // maxFeePerGas 0 and maxPriorityFeePerGas 0, which the chain rejects as
+      // "intrinsic gas too low" before it ever reaches the contract. The wallet
+      // silently defaults to zero when its own estimate does not come back, and
+      // the resulting error names gas rather than the estimate, which sends you
+      // hunting for a revert that may not exist.
+      //
+      // Estimating here has a second benefit: a genuine revert surfaces now,
+      // with the contract's own selector, instead of being flattened into a gas
+      // complaint.
+      const fees = await estimateAttestGas(address, data);
       const { hash } = await sendTransaction(
-        { to: VERIFICATIONS_ADDRESS as `0x${string}`, data, chainId: ARC_CHAIN_ID },
+        {
+          to: VERIFICATIONS_ADDRESS as `0x${string}`,
+          data,
+          chainId: ARC_CHAIN_ID,
+          ...fees,
+        },
         { address }
       );
       return hash;
@@ -167,15 +185,78 @@ export function useAttest(address: string | null) {
 export function explainAttestFailure(e: unknown): string {
   const msg = e instanceof Error ? e.message : String(e ?? '');
   const has = (sig: string) => msg.toLowerCase().includes(sig.toLowerCase());
-  if (has('NullifierTaken') || has('0x8a2b7b1e')) {
+  if (has('NullifierTaken') || has('0xf6cda903')) {
     return 'This World ID has already verified a different wallet. One human, one account.';
   }
-  if (has('AlreadyVerified')) return 'This wallet is already verified on-chain.';
-  if (has('Expired')) return 'The attestation expired. Run the World check again.';
-  if (has('BadSignature')) {
+  if (has('AlreadyVerified') || has('0x118fd7b8')) return 'This wallet is already verified on-chain.';
+  if (has('Expired') || has('0x203d82d8')) return 'The attestation expired. Run the World check again.';
+  if (has('intrinsic gas too low')) {
+    return 'The wallet sent this with no gas. That usually means its own estimate failed; ' +
+      'try again, and if it repeats the call itself is reverting.';
+  }
+  if (has('BadSignature') || has('0x5cd5d233')) {
     return 'The attestation was rejected. The deployed contract may be pointing at a different attestor key.';
   }
   if (has('User rejected') || has('denied')) return 'You dismissed the wallet prompt.';
   if (has('insufficient funds')) return 'Not enough USDC on Arc to cover gas. Add funds and try again.';
   return msg || 'The verification transaction failed.';
+}
+
+/**
+ * Gas limit and EIP-1559 fees for one attest(), read from Arc.
+ *
+ * Falls back to fixed numbers rather than throwing when the node will not
+ * answer: a wallet that cannot estimate should still be able to send, and 300k
+ * gas is far more than attest() needs (one mapping write, one ecrecover) while
+ * still being a sane ceiling.
+ */
+async function estimateAttestGas(
+  from: string,
+  data: string,
+): Promise<{ gas: bigint; maxFeePerGas: bigint; maxPriorityFeePerGas: bigint }> {
+  const call = async <T>(method: string, params: unknown[]): Promise<T> => {
+    const res = await fetch(ARC_RPC_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+      signal: AbortSignal.timeout(10000),
+    });
+    const j = (await res.json()) as { result?: T; error?: { message?: string; data?: string } };
+    if (j.error) {
+      const err = new Error(j.error.message || `${method} failed`);
+      // Carried through so explainAttestFailure can name the contract's error
+      // instead of reporting a gas problem for a call that actually reverted.
+      (err as Error & { data?: string }).data = j.error.data;
+      throw err;
+    }
+    return j.result as T;
+  };
+
+  let gas = BigInt(300000);
+  try {
+    const est = await call<string>('eth_estimateGas', [
+      { from, to: VERIFICATIONS_ADDRESS, data },
+    ]);
+    gas = (BigInt(est) * BigInt(130)) / BigInt(100);
+  } catch (e) {
+    // A revert here is real and must not be swallowed into a default gas limit:
+    // sending anyway would burn gas to fail on-chain for a reason we already
+    // know. Anything else (node down, method unsupported) keeps the fallback.
+    const detail = String((e as { data?: string }).data ?? '');
+    if (detail.startsWith('0x') && detail.length >= 10) throw e;
+  }
+
+  let gasPrice = BigInt(1000000000);
+  try {
+    gasPrice = BigInt(await call<string>('eth_gasPrice', []));
+  } catch {
+    // Keep the 1 gwei fallback.
+  }
+  if (gasPrice <= BigInt(0)) gasPrice = BigInt(1000000000);
+
+  return {
+    gas,
+    maxFeePerGas: gasPrice * BigInt(2),
+    maxPriorityFeePerGas: gasPrice,
+  };
 }
