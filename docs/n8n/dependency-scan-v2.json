@@ -1,5 +1,5 @@
 {
-  "name": "Sovereign — Dependency Vulnerability Scan (single node)",
+  "name": "Sovereign - Dependency Vulnerability Scan",
   "nodes": [
     {
       "id": "webhook",
@@ -7,8 +7,8 @@
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
       "position": [
-        0,
-        0
+        880,
+        240
       ],
       "parameters": {
         "httpMethod": "POST",
@@ -18,16 +18,53 @@
       }
     },
     {
-      "id": "scan",
-      "name": "Scan",
+      "id": "build",
+      "name": "Build queries",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        220,
-        0
+        1088,
+        240
       ],
       "parameters": {
-        "jsCode": "// One node: query OSV, validate, shape. No HTTP Request node.\n//\n// The three-node version kept returning 200 with a body that had no results in\n// it, which the shaping step then read as \"no vulnerabilities found\". The cause\n// was never nailed down, and with a deadline the right move is to delete the\n// surface rather than keep guessing at it: doing the fetch here means the\n// request body is a JavaScript object this file can see, not an expression\n// being re-encoded by a node whose behaviour depends on its settings.\n\nconst body = $input.first().json.body || {};\nconst input = body.input || {};\n\nlet pkgs = [];\nif (Array.isArray(input.packages)) {\n  pkgs = input.packages;\n} else if (input.dependencies && typeof input.dependencies === 'object') {\n  pkgs = Object.entries(input.dependencies).map(([name, range]) => ({\n    name,\n    version: String(range).replace(/^[\\^~>=<\\s]+/, ''),\n    ecosystem: input.ecosystem || 'npm',\n  }));\n} else if (input.name && input.version) {\n  // A single package, because this is what an agent sends when a human said\n  // \"check lodash 4.17.20\" and the agent did not feel like building an array.\n  pkgs = [{ name: input.name, version: input.version, ecosystem: input.ecosystem || 'npm' }];\n}\n\npkgs = pkgs\n  .filter((p) => p && p.name && p.version)\n  .map((p) => ({\n    name: String(p.name),\n    version: String(p.version),\n    ecosystem: String(p.ecosystem || input.ecosystem || 'npm'),\n  }))\n  .slice(0, 50);\n\nif (!pkgs.length) {\n  throw new Error('Send {\"input\":{\"packages\":[{\"name\",\"version\",\"ecosystem\"}]}}, {\"input\":{\"dependencies\":{...}}}, or {\"input\":{\"name\":\"lodash\",\"version\":\"4.17.20\"}}');\n}\n\n// n8n exposes its own HTTP helper inside the Code node; plain fetch exists on\n// modern builds. Try the helper first, because it is the one n8n supports.\nasync function post(url, payload) {\n  if (this && this.helpers && typeof this.helpers.httpRequest === 'function') {\n    return await this.helpers.httpRequest({\n      method: 'POST',\n      url,\n      body: payload,\n      json: true,\n      timeout: 30000,\n    });\n  }\n  const res = await fetch(url, {\n    method: 'POST',\n    headers: { 'content-type': 'application/json' },\n    body: JSON.stringify(payload),\n  });\n  const text = await res.text();\n  if (!res.ok) throw new Error('OSV answered HTTP ' + res.status + ': ' + text.slice(0, 200));\n  try {\n    return JSON.parse(text);\n  } catch (e) {\n    throw new Error('OSV did not return JSON: ' + text.slice(0, 200));\n  }\n}\n\nconst queries = pkgs.map((p) => ({\n  package: { name: p.name, ecosystem: p.ecosystem },\n  version: p.version,\n}));\n\nconst osv = await post.call(this, 'https://api.osv.dev/v1/querybatch', { queries });\n\n// A scanner that cannot tell \"found nothing\" from \"never asked\" is worse than\n// no scanner, because it sells a clean bill of health for a question it failed\n// to ask. OSV returns one result per query, in order. Anything else means we do\n// not know, and the only honest answer is to fail rather than report zero.\nconst results = osv && osv.results;\nif (!Array.isArray(results) || results.length !== pkgs.length) {\n  throw new Error(\n    'OSV returned ' + (Array.isArray(results) ? results.length : 'no') +\n    ' result(s) for ' + pkgs.length + ' query/queries. Refusing to report a clean scan. ' +\n    'Response: ' + JSON.stringify(osv).slice(0, 300)\n  );\n}\n\nconst findings = [];\npkgs.forEach((p, i) => {\n  const vulns = (results[i] && results[i].vulns) || [];\n  if (vulns.length) {\n    findings.push({\n      package: p.name,\n      version: p.version,\n      advisories: vulns.map((v) => ({ id: v.id, url: 'https://osv.dev/vulnerability/' + v.id })),\n    });\n  }\n});\n\n// `scanned` and `checkedAt` are part of the product, not decoration: what is\n// being bought is a dated statement about a specific set of versions.\nreturn [{ json: { output: {\n  scanned: pkgs.length,\n  vulnerable: findings.length,\n  findings,\n  source: 'osv.dev',\n  checkedAt: new Date().toISOString(),\n} } }];"
+        "jsCode": "// Accepts every shape a buyer's agent plausibly sends.\n//\n// The previous version took two: a packages array, or a dependencies block. An\n// agent told \"check lodash 4.17.20\" sends neither -- it sends the package and\n// the version at the top level, because that is the obvious encoding of the\n// sentence. It then threw, the throw became a 500, and the buyer was told the\n// worker was down. The worker was not down; it was refusing a reasonable\n// request for a reason nobody could see.\n//\n// A paid worker is a public API with no docs and no support channel. Being\n// liberal about the input is not sloppiness here, it is the job.\n\nconst body = $input.first().json.body || {};\nconst input = body.input ?? body ?? {};\n\nconst eco = (e) => String(e || input.ecosystem || 'npm');\nconst clean = (v) => String(v).replace(/^[\\^~>=<\\s]+/, '').trim();\n\nlet pkgs = [];\nlet shape = '';\n\nif (Array.isArray(input.packages)) {\n  shape = 'packages[]';\n  pkgs = input.packages.map((p) => ({ name: p.name, version: p.version, ecosystem: eco(p.ecosystem) }));\n} else if (Array.isArray(input)) {\n  shape = 'array';\n  pkgs = input.map((p) => ({ name: p.name, version: p.version, ecosystem: eco(p.ecosystem) }));\n} else if (input.dependencies && typeof input.dependencies === 'object') {\n  shape = 'dependencies{}';\n  pkgs = Object.entries(input.dependencies).map(([name, range]) => ({\n    name, version: clean(range), ecosystem: eco(),\n  }));\n} else if (input.name && input.version) {\n  shape = 'name+version';\n  pkgs = [{ name: input.name, version: clean(input.version), ecosystem: eco(input.ecosystem) }];\n} else if (input.package && input.version) {\n  shape = 'package+version';\n  pkgs = [{ name: input.package, version: clean(input.version), ecosystem: eco(input.ecosystem) }];\n} else if (typeof input === 'string') {\n  // \"lodash 4.17.20\" or \"lodash@4.17.20\".\n  shape = 'string';\n  const m = input.trim().match(/^([@\\w\\/.-]+?)[@\\s]+v?([\\d][\\w.+-]*)$/);\n  if (m) pkgs = [{ name: m[1], version: m[2], ecosystem: eco() }];\n}\n\npkgs = pkgs\n  .filter((p) => p && p.name && p.version)\n  .map((p) => ({ name: String(p.name), version: clean(p.version), ecosystem: eco(p.ecosystem) }))\n  .slice(0, 100);\n\nif (!pkgs.length) {\n  // The error carries what was actually received. A worker that says only\n  // \"bad input\" makes its buyer guess, and its buyer is a language model that\n  // will guess differently every time.\n  throw new Error(\n    'No package/version pairs found in the request. Send one of: ' +\n    '{\"input\":{\"name\":\"lodash\",\"version\":\"4.17.20\"}}, ' +\n    '{\"input\":{\"packages\":[{\"name\",\"version\",\"ecosystem\"}]}}, or ' +\n    '{\"input\":{\"dependencies\":{\"lodash\":\"4.17.20\"}}}. ' +\n    'Received: ' + JSON.stringify(input).slice(0, 200)\n  );\n}\n\nreturn [{ json: {\n  pkgs,\n  shape,\n  queries: pkgs.map((p) => ({\n    package: { name: p.name, ecosystem: p.ecosystem },\n    version: String(p.version),\n  })),\n} }];"
+      }
+    },
+    {
+      "id": "osv",
+      "name": "OSV querybatch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1280,
+        240
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.osv.dev/v1/querybatch",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ queries: $json.queries }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "shape",
+      "name": "Shape result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1488,
+        240
+      ],
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst raw = item.data ?? item;\n\nlet osv;\ntry {\n  osv = typeof raw === 'string' ? JSON.parse(raw) : raw;\n} catch (e) {\n  throw new Error('OSV did not return JSON: ' + String(raw).slice(0, 300));\n}\n\nconst pkgs = $('Build queries').first().json.pkgs;\n\n// A scanner that cannot tell \"found nothing\" from \"the lookup never ran\" is\n// worse than no scanner at all, because it sells a clean bill of health for a\n// question it failed to ask. OSV answers querybatch with exactly one result per\n// query, in order. Anything else means we do not know, and the only honest move\n// is to fail loudly rather than return zero findings that look identical to a\n// real all-clear.\nconst results = osv && osv.results;\nif (!Array.isArray(results) || results.length !== pkgs.length) {\n  throw new Error(\n    'OSV returned ' + (Array.isArray(results) ? results.length : 'no') +\n    ' result(s) for ' + pkgs.length + ' query/queries. Refusing to report a clean scan. ' +\n    'Sent: ' + JSON.stringify($('Build queries').first().json.queries).slice(0, 200) +\n    ' Got: ' + JSON.stringify(osv).slice(0, 300)\n  );\n}\n\nconst findings = [];\npkgs.forEach((p, i) => {\n  const vulns = (results[i] && results[i].vulns) || [];\n  if (vulns.length) {\n    findings.push({\n      package: p.name,\n      version: p.version,\n      advisories: vulns.map((v) => ({ id: v.id, url: 'https://osv.dev/vulnerability/' + v.id })),\n    });\n  }\n});\n\n// `scanned` and `checkedAt` are part of the product, not decoration: what is\n// being bought is a dated statement about a specific set of versions.\nreturn [{ json: { output: {\n  scanned: pkgs.length,\n  vulnerable: findings.length,\n  findings,\n  source: 'osv.dev',\n  checkedAt: new Date().toISOString(),\n} } }];"
       }
     },
     {
@@ -36,8 +73,8 @@
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
       "position": [
-        440,
-        0
+        1680,
+        240
       ],
       "parameters": {
         "respondWith": "allIncomingItems",
@@ -50,14 +87,36 @@
       "main": [
         [
           {
-            "node": "Scan",
+            "node": "Build queries",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Scan": {
+    "Build queries": {
+      "main": [
+        [
+          {
+            "node": "OSV querybatch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OSV querybatch": {
+      "main": [
+        [
+          {
+            "node": "Shape result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape result": {
       "main": [
         [
           {
@@ -69,5 +128,7 @@
       ]
     }
   },
-  "settings": {}
+  "settings": {
+    "executionOrder": "v1"
+  }
 }
