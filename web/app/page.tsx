@@ -20,8 +20,8 @@ const PixelBlast = dynamic(() => import('./components/PixelBlast'), { ssr: false
  */
 const FEATURES = [
   { n: '01', t: 'Set the rules once', d: 'Give your agent a daily budget, a per-action limit, and an allowlist of workers.', img: '/hero1.mp4' },
-  { n: '02', t: 'Agents pay on their own', d: 'They find services and pay per use in USDC — always within your limits.', img: '/features/pay.gif' },
-  { n: '03', t: 'Everything is on record', d: 'Reputation and audit live on-chain, not in a black box.', img: '/hero4.mp4' },
+  { n: '02', t: 'Agents pay on their own', d: 'They find services and pay per use in USDC — always within your limits.', img: '/hero2.mp4' },
+  { n: '03', t: 'Everything is on record', d: 'Reputation and audit live on-chain, not in a black box.', img: '/hero3.mp4' },
 ];
 
 const carousel_items = FEATURES.map((f) => ({ image: f.img, alt: f.t }));
