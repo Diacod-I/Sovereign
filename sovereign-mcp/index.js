@@ -83,6 +83,16 @@ async function callViaAccount(agentId, input) {
   return { httpOk: res.ok, ...data };
 }
 
+async function reviewViaAccount(payload) {
+  const res = await fetch(`${SITE_URL}/api/agent/review`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${LINK_TOKEN}` },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  return { httpOk: res.ok, ...data };
+}
+
 /**
  * A link that carries this call's context into the Sovereign web app, so the
  * human does not retype what the agent already knows. Only `review` is issued
@@ -400,8 +410,10 @@ server.tool(
             `Reason: ${r.reason || 'no output'}`,
             ``,
             `Do NOT retry and do NOT pay again.`,
-            `FILE THE RECEIPT — opens the review prefilled as not delivered:`,
-            reviewUrl,
+            `TELL THE USER and file the receipt with rate_call (met 0, delivered false,`,
+            `settlementRef "${r.settlement?.transaction || ''}"). This is the record that stops`,
+            `the next buyer paying for the same nothing.`,
+            `To file it in a browser instead: ${reviewUrl}`,
           ].join('\n') }] };
         }
 
@@ -424,8 +436,11 @@ server.tool(
           ``,
           `WORKER OUTPUT:\n${out}`,
           ``,
-          r.free ? '' : `RATE THIS CALL — opens the review prefilled:\n${reviewUrl}`,
-          r.free ? '' : `Their rating is what the next buyer sees, so it is part of the job.`,
+          r.free ? '' : `ASK THE USER whether this met what they asked for, then file it with`,
+          r.free ? '' : `rate_call (agentId "${a.id}", settlementRef "${r.settlement?.transaction || ''}").`,
+          r.free ? '' : `Do not grade it yourself. If you think the output is wrong, say so and let`,
+          r.free ? '' : `them decide. Their rating is what the next buyer sees, so it is part of the job.`,
+          r.free ? '' : `To grade in a browser instead: ${reviewUrl}`,
         ].filter(Boolean).join('\n') }] };
       }
     }
@@ -679,6 +694,65 @@ server.tool(
     } catch (e) {
       return { content: [{ type: 'text', text: `Deposit failed: ${e.message}` }], isError: true };
     }
+  }
+);
+
+server.tool(
+  'rate_call',
+  'Record the buyer\'s verdict on a call that was already paid for. The grade becomes part of ' +
+  'that agent\'s permanent public record, and it is what the next buyer sees.\n\n' +
+  'The USER decides the grade. Do NOT choose it yourself and do NOT call this tool on your own ' +
+  'initiative: ask them whether the work met what they asked for, and pass what they say. If ' +
+  'you believe the output is wrong, tell them why and let them decide -- your read of the work ' +
+  'is an argument to put to them, not a verdict to file. An agent grading the work it ' +
+  'commissioned, unsupervised, is how a reputation system becomes worthless.\n\n' +
+  'Needs the terminal paired for spending, because filing costs gas from the buyer\'s wallet.',
+  {
+    agentId: z.string().describe('The agent that was hired, as returned by call_agent'),
+    met: z.number().int().min(0).max(2).describe(
+      '0 = did not meet what was asked, 1 = partially met it, 2 = met it. From the user, not from you.'),
+    settlementRef: z.string().describe('The settlement reference call_agent printed for this payment'),
+    note: z.string().optional().describe("The user's reason, in their words. Shown to future buyers."),
+    expectation: z.string().optional().describe('What was asked for before the call ran'),
+    amountUsdc: z.string().optional().describe('What was paid, e.g. "0.1"'),
+    latencyMs: z.number().optional().describe('How long the call took, as call_agent reported'),
+    delivered: z.boolean().optional().describe('False only if nothing came back at all'),
+  },
+  async ({ agentId, met, settlementRef, note, expectation, amountUsdc, latencyMs, delivered }) => {
+    if (!LINK_TOKEN) {
+      return { content: [{ type: 'text', text:
+        'This terminal is not paired for spending, so it cannot file a grade.\n' +
+        'Run `npx sovereign-mcp@latest link --spend`, then restart this session.' }], isError: true };
+    }
+
+    let r;
+    try {
+      r = await reviewViaAccount({
+        agentId, met, settlementRef,
+        note: note || '', expectation: expectation || '',
+        amountUsdc: amountUsdc || '0',
+        latencyMs: latencyMs || 0,
+        delivered: delivered !== false,
+      });
+    } catch (e) {
+      return { content: [{ type: 'text', text:
+        `Could not reach Sovereign to file the grade (${e.message}). Nothing was recorded.` }], isError: true };
+    }
+
+    if (!r.ok) {
+      return { content: [{ type: 'text', text:
+        `The grade was NOT recorded. Reason: ${r.error || 'unknown'}\n` +
+        `Tell the user plainly; do not retry with a different rating.` }], isError: true };
+    }
+
+    const WORDS = ['did NOT meet expectations', 'PARTIALLY met expectations', 'MET expectations'];
+    return { content: [{ type: 'text', text: [
+      `Graded ${agentId}: ${WORDS[met]}.`,
+      `Receipt filed on Arc: ${r.transaction}`,
+      note ? `Note on record: "${note}"` : '',
+      ``,
+      `This is public and permanent. It changes what the next buyer sees on this agent's profile.`,
+    ].filter(Boolean).join('\n') }] };
   }
 );
 
