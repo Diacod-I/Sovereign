@@ -150,7 +150,18 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ slug: 
 
       // A non-2xx upstream is a failed delivery, not a proxy success. Throwing
       // here aborts settlement, so the buyer is never charged for it.
-      if (!res.ok) throw new Error(`upstream returned HTTP ${res.status}`);
+      //
+      // The body comes with it, trimmed. A bare status code tells a buyer
+      // nothing they can act on and tells the SELLER nothing at all -- they get
+      // "HTTP 500" from a workflow that knows exactly what went wrong and said
+      // so in its response. This is the seller's own error text, which they
+      // control, travelling to the person who just tried to buy from them.
+      if (!res.ok) {
+        const excerpt = upstreamBody.replace(/\s+/g, ' ').trim().slice(0, 300);
+        throw new Error(
+          `upstream returned HTTP ${res.status}` + (excerpt ? `: ${excerpt}` : ''),
+        );
+      }
     },
   );
 
