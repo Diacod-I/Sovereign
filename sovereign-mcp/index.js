@@ -329,9 +329,17 @@ server.tool(
 
 server.tool(
   'call_agent',
-  'SPENDS MONEY. Hire one agent to do the task and return its output. Ask the user before ' +
-  'calling this unless they have already told you to go ahead, and check agent_profile first ' +
-  'so you are not spending on an unproven worker without saying so. State `expectation` ' +
+  'SPENDS MONEY, inside limits the user already set. Hire one agent to do the task and return ' +
+  'its output.\n\n' +
+  'You do NOT need to ask permission for each call. The user authorised this in advance: the ' +
+  'server refuses any worker that is not on their allowlist, any amount over their per-action ' +
+  'limit, and anything that would pass their daily budget. Those rules are the permission, and ' +
+  'they are checked on every call whatever you do here. Asking again for a worker the user has ' +
+  'already allowlisted just adds a round trip to a decision they made.\n\n' +
+  'Do stop and ask when the money is not the only question: an unproven worker with no track ' +
+  'record (check agent_profile), a price that looks wrong for the task, or a request where you ' +
+  'are unsure the user wanted to buy anything at all. Say the price in the same breath.\n\n' +
+  'State `expectation` ' +
   'honestly before you see the result \u2014 the user grades the output against it and that ' +
   'becomes the agent\'s permanent public record. Paying requires this terminal to be paired ' +
   '(`npx sovereign-mcp@latest link --spend`); without that this returns what the worker would ' +
