@@ -1,0 +1,129 @@
+{
+  "name": "Sovereign - License Compliance Check",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sovereign-license",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "build",
+      "name": "Read the request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Normalises whatever a buyer's agent sends, then emits one item per package\n// so the HTTP node downstream fans out over them.\n//\n// There is no single shape to expect. The same request, phrased the same way by\n// the same model, arrives as a top-level name and version, as a list of\n// objects, as a package.json map, or as \"lodash@4.17.20\". A paid worker is a\n// public API with no docs and no support channel, so being liberal here is the\n// job, not sloppiness.\n\nconst body = $input.first().json.body || {};\nconst input = body.input ?? body ?? {};\n\nconst ver = (v) => String(v).replace(/^[\\^~>=<\\s]+/, '').replace(/\\s.*$/, '').trim();\n\nfunction one(entry, key) {\n  if (entry == null) return null;\n  if (typeof entry === 'string') {\n    if (key) return { name: key, version: ver(entry) };\n    const m = entry.trim().match(/^(@?[\\w./-]+?)[@\\s]+v?([\\d][\\w.+-]*)$/);\n    return m ? { name: m[1], version: m[2] } : { name: entry.trim(), version: 'latest' };\n  }\n  if (typeof entry === 'object') {\n    const name = entry.name || entry.package || entry.id || key;\n    if (!name) return null;\n    return { name: String(name), version: ver(entry.version || entry.range || entry.v || 'latest') };\n  }\n  return null;\n}\n\nfunction collect(v) {\n  if (!v) return [];\n  if (Array.isArray(v)) return v.map((e) => one(e, null));\n  if (typeof v === 'object') return Object.entries(v).map(([k, e]) => one(e, k));\n  if (typeof v === 'string') return [one(v, null)];\n  return [];\n}\n\nlet pkgs = [];\nif (input.packages !== undefined) pkgs = collect(input.packages);\nelse if (input.dependencies !== undefined) pkgs = collect(input.dependencies);\nelse if (input.deps !== undefined) pkgs = collect(input.deps);\nelse if (Array.isArray(input)) pkgs = collect(input);\nelse if (input.name || input.package) pkgs = [one(input, null)];\nelse if (typeof input === 'string') pkgs = collect(input);\n\npkgs = pkgs\n  .filter((p) => p && p.name && !/^\\d+$/.test(p.name))\n  .map((p) => ({ name: String(p.name), version: String(p.version || 'latest') }))\n  .slice(0, 25);\n\nif (!pkgs.length) {\n  throw new Error(\n    'No packages found. Accepted: {\"input\":{\"name\":\"lodash\",\"version\":\"4.17.20\"}}, ' +\n    '{\"input\":{\"dependencies\":[{\"name\",\"version\"}]}}, ' +\n    '{\"input\":{\"dependencies\":{\"lodash\":\"^4.17.20\"}}}, ' +\n    '{\"input\":{\"packages\":[\"lodash@4.17.20\"]}}. ' +\n    'Received: ' + JSON.stringify(input).slice(0, 250)\n  );\n}\n\n// npm serves a scoped name with the slash percent-encoded, and nowhere else.\nreturn pkgs.map((p) => ({ json: {\n  name: p.name,\n  version: p.version,\n  url: 'https://registry.npmjs.org/' + p.name.replace('/', '%2f') + '/' + encodeURIComponent(p.version),\n} }));"
+      }
+    },
+    {
+      "id": "fetch",
+      "name": "npm registry",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.url }}",
+        "options": {
+          "timeout": 20000
+        }
+      }
+    },
+    {
+      "id": "shape",
+      "name": "Shape result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const asked = $('Read the request').all().map((i) => i.json);\nconst got = $input.all().map((i) => i.json);\n\nif (got.length !== asked.length) {\n  throw new Error(\n    'The registry answered for ' + got.length + ' of ' + asked.length + ' packages. ' +\n    'Refusing to report a partial audit as a complete one.'\n  );\n}\n\n// Categories, not opinions. What counts as acceptable depends on what the buyer\n// is shipping, so this reports the obligation and lets them decide. Saying\n// \"GPL is bad\" would be wrong for half the people asking.\nconst STRONG = /^(A?GPL|SSPL|OSL|EUPL|CPAL)/i;\nconst WEAK = /^(LGPL|MPL|EPL|CDDL|MS-RL)/i;\nconst PERMISSIVE = /^(MIT|ISC|BSD|Apache|Unlicense|0BSD|Zlib|CC0|WTFPL|Python-2)/i;\n\nfunction classify(raw) {\n  if (!raw) return { category: 'unknown', obligation: 'No license field published. Treat as all rights reserved until the maintainer clarifies.' };\n  const id = String(typeof raw === 'object' ? (raw.type || raw.name || '') : raw).trim();\n  if (!id) return { category: 'unknown', obligation: 'No license field published. Treat as all rights reserved until the maintainer clarifies.' };\n  if (STRONG.test(id)) return { category: 'strong-copyleft', obligation: 'Distributing linked code may require releasing your source under the same license.' };\n  if (WEAK.test(id)) return { category: 'weak-copyleft', obligation: 'Modifications to this package must usually be published; your own code generally need not be.' };\n  if (PERMISSIVE.test(id)) return { category: 'permissive', obligation: 'Attribution, and keep the license text. No source obligation.' };\n  return { category: 'other', obligation: 'Not a common identifier. Read the license before shipping.' };\n}\n\nconst results = asked.map((a, i) => {\n  const r = got[i] || {};\n  // A 404 arrives as an error body rather than a throw, because the HTTP node\n  // is set to continue: one unpublished version must not void the whole audit.\n  const missing = !r.name || r.error;\n  const id = missing ? null : (typeof r.license === 'object' ? (r.license.type || r.license.name || null) : r.license || null);\n  const c = classify(id);\n  return {\n    package: a.name,\n    version: missing ? a.version : (r.version || a.version),\n    license: id,\n    category: missing ? 'not-found' : c.category,\n    obligation: missing\n      ? 'This package or version is not on the npm registry, so nothing could be checked.'\n      : c.obligation,\n    deprecated: missing ? null : (typeof r.deprecated === 'string' ? r.deprecated : !!r.deprecated),\n    homepage: missing ? null : (r.homepage || null),\n  };\n});\n\nconst flagged = results.filter((r) => r.category === 'strong-copyleft' || r.category === 'weak-copyleft');\nconst unknown = results.filter((r) => r.category === 'unknown' || r.category === 'not-found');\n\nreturn [{ json: { output: {\n  scanned: results.length,\n  copyleft: flagged.length,\n  unknown: unknown.length,\n  // Said plainly so a buyer's agent does not turn a categorisation into legal\n  // advice it is not qualified to give.\n  verdict: flagged.length === 0 && unknown.length === 0\n    ? 'All dependencies are permissively licensed.'\n    : 'Some dependencies carry source obligations or publish no license. Review before shipping proprietary software.',\n  licenses: results,\n  source: 'registry.npmjs.org',\n  note: 'A categorisation of published license identifiers, not legal advice.',\n  checkedAt: new Date().toISOString(),\n} } }];"
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Read the request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read the request": {
+      "main": [
+        [
+          {
+            "node": "npm registry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "npm registry": {
+      "main": [
+        [
+          {
+            "node": "Shape result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape result": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

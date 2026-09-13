@@ -1,0 +1,129 @@
+{
+  "name": "Sovereign - Dependency Health Check",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sovereign-health",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "build",
+      "name": "Read the request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Normalises whatever a buyer's agent sends, then emits one item per package\n// so the HTTP node downstream fans out over them.\n//\n// There is no single shape to expect. The same request, phrased the same way by\n// the same model, arrives as a top-level name and version, as a list of\n// objects, as a package.json map, or as \"lodash@4.17.20\". A paid worker is a\n// public API with no docs and no support channel, so being liberal here is the\n// job, not sloppiness.\n\nconst body = $input.first().json.body || {};\nconst input = body.input ?? body ?? {};\n\nconst ver = (v) => String(v).replace(/^[\\^~>=<\\s]+/, '').replace(/\\s.*$/, '').trim();\n\nfunction one(entry, key) {\n  if (entry == null) return null;\n  if (typeof entry === 'string') {\n    if (key) return { name: key, version: ver(entry) };\n    const m = entry.trim().match(/^(@?[\\w./-]+?)[@\\s]+v?([\\d][\\w.+-]*)$/);\n    return m ? { name: m[1], version: m[2] } : { name: entry.trim(), version: 'latest' };\n  }\n  if (typeof entry === 'object') {\n    const name = entry.name || entry.package || entry.id || key;\n    if (!name) return null;\n    return { name: String(name), version: ver(entry.version || entry.range || entry.v || 'latest') };\n  }\n  return null;\n}\n\nfunction collect(v) {\n  if (!v) return [];\n  if (Array.isArray(v)) return v.map((e) => one(e, null));\n  if (typeof v === 'object') return Object.entries(v).map(([k, e]) => one(e, k));\n  if (typeof v === 'string') return [one(v, null)];\n  return [];\n}\n\nlet pkgs = [];\nif (input.packages !== undefined) pkgs = collect(input.packages);\nelse if (input.dependencies !== undefined) pkgs = collect(input.dependencies);\nelse if (input.deps !== undefined) pkgs = collect(input.deps);\nelse if (Array.isArray(input)) pkgs = collect(input);\nelse if (input.name || input.package) pkgs = [one(input, null)];\nelse if (typeof input === 'string') pkgs = collect(input);\n\npkgs = pkgs\n  .filter((p) => p && p.name && !/^\\d+$/.test(p.name))\n  .map((p) => ({ name: String(p.name), version: String(p.version || 'latest') }))\n  .slice(0, 25);\n\nif (!pkgs.length) {\n  throw new Error(\n    'No packages found. Accepted: {\"input\":{\"name\":\"lodash\",\"version\":\"4.17.20\"}}, ' +\n    '{\"input\":{\"dependencies\":[{\"name\",\"version\"}]}}, ' +\n    '{\"input\":{\"dependencies\":{\"lodash\":\"^4.17.20\"}}}, ' +\n    '{\"input\":{\"packages\":[\"lodash@4.17.20\"]}}. ' +\n    'Received: ' + JSON.stringify(input).slice(0, 250)\n  );\n}\n\n// npm's own search index carries the publish date and its quality, popularity\n// and maintenance scores in one small response. The full packument has the same\n// dates but is megabytes for a popular package, which is a bad trade for a\n// worker that has to answer inside a request.\nreturn pkgs.map((p) => ({ json: {\n  name: p.name,\n  version: p.version,\n  url: 'https://registry.npmjs.org/-/v1/search?size=1&text=' + encodeURIComponent(p.name),\n} }));"
+      }
+    },
+    {
+      "id": "fetch",
+      "name": "npm registry",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.url }}",
+        "options": {
+          "timeout": 20000
+        }
+      }
+    },
+    {
+      "id": "shape",
+      "name": "Shape result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const asked = $('Read the request').all().map((i) => i.json);\nconst got = $input.all().map((i) => i.json);\n\nif (got.length !== asked.length) {\n  throw new Error(\n    'The registry answered for ' + got.length + ' of ' + asked.length + ' packages. ' +\n    'Refusing to report a partial audit as a complete one.'\n  );\n}\n\nconst DAY = 24 * 60 * 60 * 1000;\nconst now = Date.now();\n\nconst results = asked.map((a, i) => {\n  const hit = ((got[i] || {}).objects || [])[0] || null;\n  const pkg = hit ? hit.package || {} : {};\n\n  // The search index is fuzzy: it will happily return a near-miss for a name\n  // that does not exist. Matching exactly is the difference between \"this\n  // package is fine\" and \"some other package is fine\".\n  const matched = pkg.name && String(pkg.name).toLowerCase() === a.name.toLowerCase();\n  if (!matched) {\n    return {\n      package: a.name,\n      status: 'not-found',\n      detail: 'No package by this exact name on the npm registry.',\n    };\n  }\n\n  const published = pkg.date ? Date.parse(pkg.date) : NaN;\n  const ageDays = Number.isFinite(published) ? Math.floor((now - published) / DAY) : null;\n  const score = hit.score || {};\n  const d = score.detail || {};\n\n  const signals = [];\n  if (ageDays !== null && ageDays > 730) signals.push('No release in over two years.');\n  if (ageDays !== null && ageDays > 365 && ageDays <= 730) signals.push('No release in over a year.');\n  if (typeof d.maintenance === 'number' && d.maintenance < 0.3) signals.push('npm maintenance score is low.');\n  if ((pkg.maintainers || []).length === 1) signals.push('Single maintainer: one person is the bus factor.');\n  if (a.version !== 'latest' && pkg.version && a.version !== pkg.version) {\n    signals.push('You are on ' + a.version + '; latest is ' + pkg.version + '.');\n  }\n\n  return {\n    package: a.name,\n    yourVersion: a.version,\n    latestVersion: pkg.version || null,\n    lastPublished: pkg.date || null,\n    daysSinceRelease: ageDays,\n    maintainers: (pkg.maintainers || []).length || null,\n    scores: {\n      quality: typeof d.quality === 'number' ? Math.round(d.quality * 100) / 100 : null,\n      popularity: typeof d.popularity === 'number' ? Math.round(d.popularity * 100) / 100 : null,\n      maintenance: typeof d.maintenance === 'number' ? Math.round(d.maintenance * 100) / 100 : null,\n    },\n    status: signals.length ? 'attention' : 'healthy',\n    signals,\n    links: pkg.links || null,\n  };\n});\n\nconst attention = results.filter((r) => r.status === 'attention');\nconst missing = results.filter((r) => r.status === 'not-found');\n\nreturn [{ json: { output: {\n  scanned: results.length,\n  needsAttention: attention.length,\n  notFound: missing.length,\n  verdict: attention.length === 0 && missing.length === 0\n    ? 'Every dependency is actively maintained and current.'\n    : attention.length + ' of ' + results.length + ' dependencies show maintenance risk.',\n  packages: results,\n  source: 'registry.npmjs.org search index',\n  note: 'Maintenance signals, not a security scan. Pair with an advisory lookup.',\n  checkedAt: new Date().toISOString(),\n} } }];"
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Read the request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read the request": {
+      "main": [
+        [
+          {
+            "node": "npm registry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "npm registry": {
+      "main": [
+        [
+          {
+            "node": "Shape result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape result": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
