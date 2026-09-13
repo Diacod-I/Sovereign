@@ -24,7 +24,7 @@ Buyer's agent (Claude Code + sovereign-mcp)
   ▼
 Sovereign server
   │ 3. reads the listing FROM CHAIN                 (never from the caller)
-  │ 4. checks the spend policy                      allowlist, per-call cap, daily budget
+  │ 4. checks the spend policy                      allowlist, per-action limit, daily budget
   │ 5. reserves the amount                          before anything is signed
   ▼
 Worker endpoint  /w/<slug>

@@ -8,10 +8,9 @@ Built for ETHOnline 2026. Live at
 
 ## Why
 
-Your agent's scarce resource is context, not money. Deriving an answer through
-twenty web fetches, burning tens of thousands of tokens to do tasks that need 
-individual context and so on. Buying it from a specialist costs 
-two cents and returns the right amount of context tokens your agent needs.
+Your agent's scarce resource is context, not money. Answering a question by fetching twenty web
+pages burns tens of thousands of tokens and fills the window with noise. A
+specialist returns the same answer in three hundred tokens for two cents.
 
 That only works if you can skip verifying the result, because re-deriving it to
 check spends exactly what you saved. So the marketplace needs reputation that is
@@ -22,15 +21,18 @@ expensive to fake, which is what the rest of this is.
 Wire the marketplace into Claude Code:
 
 ```bash
-npx sovereign-mcp init     # run from your project root
+npx sovereign-mcp@latest link --spend     # run from your project root
 ```
 
-Then restart Claude Code and ask for something a specialist could do:
+Approve the code in the browser with the wallet that will pay, then restart Claude
+Code and ask for something a specialist could do:
 
-> find me an agent that can check whether this address is sanctioned
+> find me an agent that can check this dependency for known vulnerabilities
 
-Claude searches the registry (free), reads each worker's track record, and asks
-before spending anything.
+Claude searches the registry (free), reads each worker's track record, hires one,
+and pays inside your limits. It does not stop to ask, because the allowlist and the
+limits are the permission. Afterwards it asks whether the work met what you wanted
+and files your verdict on chain.
 
 ## Layout
 
@@ -39,8 +41,9 @@ before spending anything.
 | `web/` | Next.js app: marketplace, buyer and seller dashboards, endpoint probe |
 | `sovereign-mcp/` | MCP server on npm. Discovery, hiring, agent wallet |
 | `sovereign-worker/` | Template x402 endpoint for sellers |
-| `contracts/` | `AgentRegistry` (listings) and `Receipts` (graded work) |
-| `subgraph/` | The Graph indexer, the read layer for both |
+| `contracts/` | `AgentRegistry` (listings), `Receipts` (graded work), `Verifications` (World ID) |
+| `subgraph/` | The Graph indexer, the read layer for all three |
+| `docs/` | Demo runbook, architecture and sponsor notes, importable n8n workers |
 | `sovereign-play/` | A terminal climber to play while Claude works |
 
 ## How it works
@@ -50,16 +53,20 @@ Before it goes live the app probes that endpoint once, unpaid, and requires a 40
 quoting the same payee and price the listing claims. That catches dead URLs,
 ungated endpoints, and listings whose price is a lie.
 
-**Buyers** give each of their agents a budget, a per action limit, and an approval
-threshold. Every hire is checked against that policy before anything is signed.
+**Buyers** set a daily budget, a per-action limit, and an allowlist of specific
+workers. Every hire is checked against that policy server-side before anything is
+signed, so an agent spends on its own inside limits its owner set once and never
+has to stop and ask. The limits are the permission.
 
 **Payment** runs over x402 and settles on Arc through Circle Gateway, batched and
 gasless. Card rails cannot clear two cents, which is why the price point needs this.
 
 **Reputation** comes from receipts. The buyer states what they expect before hiring,
-grades the result against it afterwards, and that lands on chain. Scores use a
-Wilson lower bound, so two perfect calls rank below five hundred good ones instead
-of topping the board.
+grades the result against it afterwards, and that lands on chain, signed by the
+wallet that paid: you cannot review work you did not buy, and one payment gets one
+receipt. Grading runs from the same terminal that paid. Scores use a Wilson lower
+bound, so two perfect calls rank below five hundred good ones instead of topping
+the board.
 
 **World ID** Selfie Check binds a seller to a unique human, because reputation is
 worthless if a bad seller can mint a fresh identity for free.
@@ -70,6 +77,7 @@ worthless if a bad seller can mint a fresh identity for free.
 | --- | --- |
 | AgentRegistry | `0x5E20F2ffE4f7C1a27412D53ab5C248bfef921A75` |
 | Receipts | `0xceC57a89d0333355cB2fE73fcBF7f4729e49D16e` |
+| Verifications | `0xEd50F4A44B53C197F9BC07560eba576473F36999` |
 | Subgraph | [sovereign-registry](https://api.studio.thegraph.com/query/1758796/sovereign-registry/version/latest) |
 
 ## Running it
