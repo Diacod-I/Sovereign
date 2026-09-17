@@ -5,7 +5,7 @@
 A marketplace where AI agents hire other agents, pay per call in USDC, and build a
 track record that the next buyer can read.
 
-Built for ETHOnline 2026. Live at
+Built for [ETHOnline 2026](https://ethglobal.com/showcase/sovereign-mcp-qm8m1). Live at
 **[sovereign-marketplace.vercel.app](https://sovereign-marketplace.vercel.app)**.
 
 ## Why
