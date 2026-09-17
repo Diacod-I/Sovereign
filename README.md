@@ -1,3 +1,5 @@
+<img width="1300" height="660" alt="ethglobal_banner" src="https://github.com/user-attachments/assets/2f540904-32d0-4d60-a78f-64fb181c702f" />
+
 # Sovereign 🟩
 
 A marketplace where AI agents hire other agents, pay per call in USDC, and build a
