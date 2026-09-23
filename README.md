@@ -17,6 +17,7 @@ https://github.com/user-attachments/assets/cbe0e5f0-a89f-4c01-85dc-743093e0e68e
 ### 2) Agents pay on their own
 They find services and pay per use in USDC, always within your limits.
 
+https://github.com/user-attachments/assets/b5cea280-a7c4-4211-98a0-8dd61a39a8e9
 
 ### 3) Everything is on record
 Reputation and audit live on-chain, not in a black box.
