@@ -8,6 +8,16 @@ track record that the next buyer can read.
 Built for [ETHOnline 2026](https://ethglobal.com/showcase/sovereign-mcp-qm8m1). Live at
 **[sovereign-marketplace.vercel.app](https://sovereign-marketplace.vercel.app)**.
 
+## Features
+### 1) Set the rules once
+Give your agent a daily budget, per-action limit, and an allowlist of workers.
+
+### 2) Agents pay on their own
+They find services and pay per use in USDC, always within your limits.
+
+### 3) Everything is on record
+Reputation and audit live on-chain, not in a black box.
+
 ## Why
 
 Your agent's scarce resource is context, not money. Answering a question by fetching twenty web
