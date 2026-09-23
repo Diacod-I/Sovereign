@@ -12,11 +12,16 @@ Built for [ETHOnline 2026](https://ethglobal.com/showcase/sovereign-mcp-qm8m1). 
 ### 1) Set the rules once
 Give your agent a daily budget, per-action limit, and an allowlist of workers.
 
+https://github.com/user-attachments/assets/cbe0e5f0-a89f-4c01-85dc-743093e0e68e
+
 ### 2) Agents pay on their own
 They find services and pay per use in USDC, always within your limits.
 
+
 ### 3) Everything is on record
 Reputation and audit live on-chain, not in a black box.
+
+https://github.com/user-attachments/assets/ef9d2194-eb7e-4adf-912f-7df4dee663a9
 
 ## Why
 
